@@ -8,6 +8,7 @@ const projectSchema = new mongoose.Schema({
   tech: [{ type: String }],
   liveLink: { type: String },
   githubLink: { type: String },
+  user: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
   createdAt: { type: Date, default: Date.now },
 });
 

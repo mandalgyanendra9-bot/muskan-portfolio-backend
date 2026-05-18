@@ -1,9 +1,16 @@
 const User = require("../models/User");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const mongoose = require("mongoose");
 
 // REGISTER
 exports.register = async (req, res) => {
+  if (mongoose.connection.readyState !== 1) {
+    return res.status(500).json({ 
+      message: "Database connection is offline. Please make sure MongoDB local service is started." 
+    });
+  }
+
   try {
     const { name, email, password, role } = req.body;
 
@@ -29,6 +36,12 @@ exports.register = async (req, res) => {
 
 // LOGIN
 exports.login = async (req, res) => {
+  if (mongoose.connection.readyState !== 1) {
+    return res.status(500).json({ 
+      message: "Database connection is offline. Please make sure MongoDB local service is started." 
+    });
+  }
+
   try {
     const { email, password } = req.body;
 

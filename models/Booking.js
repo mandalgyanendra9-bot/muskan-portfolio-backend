@@ -17,6 +17,8 @@ const bookingSchema = new mongoose.Schema({
     default: "unpaid" 
   },
   paymentId: { type: String },
+  meetingLink: { type: String, default: "" },
+  ratingGiven: { type: Boolean, default: false },
   notes: { type: String },
   createdAt: { type: Date, default: Date.now }
 });

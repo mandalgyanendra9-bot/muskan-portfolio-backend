@@ -26,6 +26,8 @@ app.use("/api/posts", require("./routes/postRoutes"));
 app.use("/api/analytics", require("./routes/analyticsRoutes"));
 app.use("/api/bookings", require("./routes/bookingRoutes"));
 app.use("/api/profiles", require("./routes/profileRoutes"));
+app.use("/api/reviews", require("./routes/reviewRoutes"));
+app.use("/api/admin", require("./routes/adminRoutes"));
 
 app.get("/", (req, res) => {
   res.send("Backend Running OK");

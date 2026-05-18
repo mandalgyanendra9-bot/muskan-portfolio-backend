@@ -31,6 +31,16 @@ router.get("/:id/access", authMiddleware, async (req, res) => {
   }
 });
 
+// GET PROJECTS BY USER ID
+router.get("/user/:userId", async (req, res) => {
+  try {
+    const projects = await Project.find({ user: req.params.userId }).select("-liveLink");
+    res.json(projects);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
 // ADD PROJECT (Protected)
 router.post("/", authMiddleware, upload.single("image"), async (req, res) => {
   try {
@@ -45,6 +55,7 @@ router.post("/", authMiddleware, upload.single("image"), async (req, res) => {
       liveLink,
       githubLink,
       image: imageUrl,
+      user: req.user.id,
     });
 
     res.status(201).json(newProject);

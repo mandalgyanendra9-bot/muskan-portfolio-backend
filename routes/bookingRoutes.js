@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const Booking = require("../models/Booking");
+const User = require("../models/User");
 const authMiddleware = require("../middleware/authMiddleware");
 const Razorpay = require("razorpay");
 const crypto = require("crypto");
@@ -12,34 +13,46 @@ if (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
     key_secret: process.env.RAZORPAY_KEY_SECRET,
   });
 } else {
-  console.warn("Razorpay keys missing. Payment features will be disabled.");
+  console.warn("Razorpay keys missing. Using Demo Payment Fallback Mode.");
 }
 
-// 1. CREATE BOOKING & RAZORPAY ORDER
+// 1. CREATE BOOKING & ORDER
 router.post("/create-order", authMiddleware, async (req, res) => {
   try {
-    const { expert, date, duration, totalPrice, notes } = req.body;
+    const { expert: expertId, date, duration, totalPrice, notes } = req.body;
 
-    // Create Booking in DB (Pending)
+    // Verify expert availability and role
+    const expert = await User.findById(expertId);
+    if (!expert) return res.status(404).json({ message: "Expert not found" });
+
+    // Create Booking in DB (Pending status by default)
     const booking = await Booking.create({
       client: req.user.id,
-      expert,
+      expert: expertId,
       date,
       duration,
       totalPrice,
-      notes
+      notes,
+      meetingLink: `/video-call/room_${Math.random().toString(36).substring(2, 9)}` // Auto-generate room link
     });
 
-    // Create Razorpay Order
+    // Check if Razorpay is configured
+    if (!razorpay) {
+      // In Demo Mode: Create a dummy order and flag it as a mock order so the UI can proceed immediately
+      return res.status(201).json({
+        booking,
+        orderId: `mock_order_${booking._id}`,
+        amount: totalPrice * 100,
+        currency: "INR",
+        isDemoMode: true
+      });
+    }
+
     const options = {
-      amount: totalPrice * 100, // amount in smallest currency unit (paise)
+      amount: totalPrice * 100, // in paise
       currency: "INR",
       receipt: `receipt_${booking._id}`,
     };
-
-    if (!razorpay) {
-      return res.status(500).json({ message: "Payment system not configured" });
-    }
 
     const order = await razorpay.orders.create(options);
 
@@ -47,7 +60,8 @@ router.post("/create-order", authMiddleware, async (req, res) => {
       booking,
       orderId: order.id,
       amount: order.amount,
-      currency: order.currency
+      currency: order.currency,
+      isDemoMode: false
     });
   } catch (error) {
     console.error(error);
@@ -55,25 +69,40 @@ router.post("/create-order", authMiddleware, async (req, res) => {
   }
 });
 
-// 2. VERIFY PAYMENT SIGNATURE
+// 2. VERIFY PAYMENT SIGNATURE / CONFIRM DEMO BOOKING
 router.post("/verify-payment", authMiddleware, async (req, res) => {
   try {
     const { 
       bookingId, 
       razorpay_order_id, 
       razorpay_payment_id, 
-      razorpay_signature 
+      razorpay_signature,
+      isDemoMode 
     } = req.body;
 
-    const body = razorpay_order_id + "|" + razorpay_payment_id;
+    // Handle Demo Mode Payment
+    if (isDemoMode) {
+      const booking = await Booking.findByIdAndUpdate(
+        bookingId,
+        { 
+          status: "confirmed", 
+          paymentStatus: "paid", 
+          paymentId: `demo_payment_${Date.now()}` 
+        },
+        { new: true }
+      ).populate("client expert", "name email profileImage title");
+      
+      return res.json({ message: "Demo Payment Successful & Confirmed!", booking });
+    }
 
+    // Verify Real Signature
+    const body = razorpay_order_id + "|" + razorpay_payment_id;
     const expectedSignature = crypto
       .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
       .update(body.toString())
       .digest("hex");
 
     if (expectedSignature === razorpay_signature) {
-      // Payment Successful
       const booking = await Booking.findByIdAndUpdate(
         bookingId,
         { 
@@ -82,7 +111,7 @@ router.post("/verify-payment", authMiddleware, async (req, res) => {
           paymentId: razorpay_payment_id 
         },
         { new: true }
-      );
+      ).populate("client expert", "name email profileImage title");
       res.json({ message: "Payment Verified Successfully", booking });
     } else {
       res.status(400).json({ message: "Invalid Signature" });
@@ -97,8 +126,56 @@ router.get("/my-bookings", authMiddleware, async (req, res) => {
   try {
     const bookings = await Booking.find({
       $or: [{ client: req.user.id }, { expert: req.user.id }]
-    }).populate("client expert", "name email profileImage title");
+    })
+      .populate("client expert", "name email profileImage title rating reviewsCount")
+      .sort({ date: 1 });
     res.json(bookings);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// 4. UPDATE BOOKING STATUS (Accept/Reject/Complete/Cancel)
+router.put("/:id/status", authMiddleware, async (req, res) => {
+  try {
+    const { status } = req.body;
+    if (!["pending", "confirmed", "completed", "cancelled"].includes(status)) {
+      return res.status(400).json({ message: "Invalid status value" });
+    }
+
+    const booking = await Booking.findById(req.params.id);
+    if (!booking) return res.status(404).json({ message: "Booking not found" });
+
+    // Authorization: User must be either client or expert of this booking
+    const isClient = booking.client.toString() === req.user.id;
+    const isExpert = booking.expert.toString() === req.user.id;
+    
+    // Admin check
+    const user = await User.findById(req.user.id);
+    const isAdmin = user && user.role === "admin";
+
+    if (!isClient && !isExpert && !isAdmin) {
+      return res.status(403).json({ message: "You are not authorized to edit this booking" });
+    }
+
+    // Business rules:
+    // Experts can accept/reject pending bookings, or mark them completed.
+    // Clients can cancel their bookings.
+    booking.status = status;
+    
+    if (status === "completed") {
+      // If completed, ensure marked as paid just in case
+      if (booking.paymentStatus === "unpaid") {
+        booking.paymentStatus = "paid";
+      }
+    }
+
+    await booking.save();
+    
+    const updatedBooking = await Booking.findById(booking._id)
+      .populate("client expert", "name email profileImage title rating reviewsCount");
+      
+    res.json(updatedBooking);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
