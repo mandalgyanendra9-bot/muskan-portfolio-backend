@@ -1,11 +1,26 @@
 const express = require("express");
 const router = express.Router();
-const { register, login } = require("../controllers/authController");
+const {
+  register,
+  login,
+  verifyEmail,
+  forgotPassword,
+  resetPassword,
+  googleLogin,
+} = require("../controllers/authController");
 
-// REGISTER
+// ─── Standard Auth ────────────────────────────────────────────────────────────
 router.post("/register", register);
-
-// LOGIN
 router.post("/login", login);
 
-module.exports = router;
+// ─── Email Verification ───────────────────────────────────────────────────────
+router.get("/verify-email/:token", verifyEmail);
+
+// ─── Password Reset ───────────────────────────────────────────────────────────
+router.post("/forgot-password", forgotPassword);
+router.post("/reset-password/:token", resetPassword);
+
+// ─── Google OAuth ─────────────────────────────────────────────────────────────
+router.post("/google-login", googleLogin);
+
+module.exports = router;

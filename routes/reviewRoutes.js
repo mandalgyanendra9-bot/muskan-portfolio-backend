@@ -55,10 +55,22 @@ router.post("/", authMiddleware, async (req, res) => {
   }
 });
 
-// GET REVIEWS FOR AN EXPERT
+// GET REVIEWS FOR AN EXPERT (public)
 router.get("/expert/:expertId", async (req, res) => {
   try {
     const reviews = await Review.find({ expert: req.params.expertId })
+      .populate("client", "name profileImage")
+      .sort({ createdAt: -1 });
+    res.json(reviews);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// GET MY REVIEWS (logged-in expert sees reviews about themselves)
+router.get("/mine", authMiddleware, async (req, res) => {
+  try {
+    const reviews = await Review.find({ expert: req.user.id })
       .populate("client", "name profileImage")
       .sort({ createdAt: -1 });
     res.json(reviews);
