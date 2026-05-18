@@ -34,6 +34,15 @@ app.use(cors({
   },
   credentials: true,
 }));
+
+// ─── Fix Cross-Origin-Opener-Policy for Google OAuth ─────────────────────────
+// Google Sign-In uses window.postMessage which requires COOP to be unsafe-none
+app.use((req, res, next) => {
+  res.setHeader("Cross-Origin-Opener-Policy", "unsafe-none");
+  res.setHeader("Cross-Origin-Embedder-Policy", "unsafe-none");
+  next();
+});
+
 app.use(express.json());
 app.use("/uploads", express.static("uploads"));
 
