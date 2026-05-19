@@ -16,7 +16,7 @@ const app = express();
 const allowedOrigins = [
   "http://localhost:5173",
   "http://localhost:3000",
-  "https://muskan-portfolio-frontnend.vercel.app",
+  "https://muskan-portfolio-frontend.vercel.app",
   // Add any other Vercel preview URLs if needed
 ];
 app.use(cors({
