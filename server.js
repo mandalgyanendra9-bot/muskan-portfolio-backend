@@ -57,6 +57,7 @@ app.use("/api/bookings", require("./routes/bookingRoutes"));
 app.use("/api/profiles", require("./routes/profileRoutes"));
 app.use("/api/reviews", require("./routes/reviewRoutes"));
 app.use("/api/admin", require("./routes/adminRoutes"));
+app.use("/api/payments", require("./routes/paymentRoutes"));
 
 app.get("/", (req, res) => {
   res.send("Backend Running OK");

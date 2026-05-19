@@ -75,6 +75,11 @@ const userSchema = new mongoose.Schema({
   // ─── Favorites ─────────────────────────────────────────
   favorites: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
 
+  // ─── Wallet & Subscriptions ────────────────────────────
+  walletBalance: { type: Number, default: 0 },
+  subscriptionPlan: { type: String, enum: ["free", "pro", "premium"], default: "free" },
+  subscriptionExpiresAt: { type: Date, default: null },
+
   createdAt: { type: Date, default: Date.now },
 });
 
