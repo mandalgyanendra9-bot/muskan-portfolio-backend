@@ -264,12 +264,22 @@ exports.googleLogin = async (req, res) => {
     }
 
     // Verify the ID token with Google's tokeninfo endpoint
-    const googleRes = await fetch(
-      `https://oauth2.googleapis.com/tokeninfo?id_token=${credential}`
-    );
-    const payload = await googleRes.json();
+    const https = require('https');
+    const payload = await new Promise((resolve, reject) => {
+      https.get(`https://oauth2.googleapis.com/tokeninfo?id_token=${credential}`, (response) => {
+        let data = '';
+        response.on('data', (chunk) => data += chunk);
+        response.on('end', () => {
+          try {
+            resolve(JSON.parse(data));
+          } catch (err) {
+            reject(err);
+          }
+        });
+      }).on('error', reject);
+    });
 
-    if (!googleRes.ok || !payload.email) {
+    if (!payload || !payload.email) {
       return res.status(400).json({ message: "Invalid Google token. Please try again." });
     }
 
