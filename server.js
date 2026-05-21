@@ -21,8 +21,20 @@ const allowedOrigins = [
   "http://localhost:3000",
   "https://muskan-portfolio-frontend.vercel.app",
 ];
+
+const isAllowedOrigin = (origin) => {
+  if (!origin) return true;
+  if (allowedOrigins.includes(origin)) return true;
+  return /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin);
+};
+
 app.use(cors({
-  origin: allowedOrigins,
+  origin: (origin, callback) => {
+    if (isAllowedOrigin(origin)) {
+      return callback(null, true);
+    }
+    return callback(new Error("Not allowed by CORS"));
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
@@ -61,7 +73,12 @@ const server = http.createServer(app);
 // Initialize Socket.io with CORS matching allowed origins
 const io = new Server(server, {
   cors: {
-    origin: allowedOrigins,
+    origin: (origin, callback) => {
+      if (isAllowedOrigin(origin)) {
+        return callback(null, true);
+      }
+      return callback(new Error("Not allowed by CORS"));
+    },
     credentials: true,
   },
 });

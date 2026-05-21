@@ -15,6 +15,26 @@ router.get("/", async (req, res) => {
   }
 });
 
+// GET CURRENT USER PROJECTS
+router.get("/my", authMiddleware, async (req, res) => {
+  try {
+    const projects = await Project.find({ user: req.user.id }).sort({ createdAt: -1 });
+    res.json(projects);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// GET PROJECTS BY USER ID
+router.get("/user/:userId", async (req, res) => {
+  try {
+    const projects = await Project.find({ user: req.params.userId }).select("-liveLink");
+    res.json(projects);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
 // SECURE DEMO ACCESS (PRO LEVEL)
 router.get("/:id/access", authMiddleware, async (req, res) => {
   try {
@@ -31,20 +51,14 @@ router.get("/:id/access", authMiddleware, async (req, res) => {
   }
 });
 
-// GET PROJECTS BY USER ID
-router.get("/user/:userId", async (req, res) => {
-  try {
-    const projects = await Project.find({ user: req.params.userId }).select("-liveLink");
-    res.json(projects);
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-});
-
 // ADD PROJECT (Protected)
 router.post("/", authMiddleware, upload.single("image"), async (req, res) => {
   try {
     const { title, description, type, tech, liveLink, githubLink } = req.body;
+    if (!title || !description) {
+      return res.status(400).json({ message: "Title and description are required" });
+    }
+
     const imageUrl = req.file ? `/uploads/${req.file.filename}` : "";
     
     const newProject = await Project.create({
