@@ -4,6 +4,8 @@ const User = require("../models/User");
 const authMiddleware = require("../middleware/authMiddleware");
 const upload = require("../middleware/Upload");
 
+const safeProfileSelect = "-password -emailVerifyToken -resetPasswordToken -resetPasswordExpires";
+
 // ─── GET ALL EXPERTS (public) ─────────────────────────────────────────────────
 router.get("/experts", async (req, res) => {
   try {
@@ -52,12 +54,12 @@ router.put("/update", authMiddleware, upload.single("profileImage"), async (req,
     const {
       name, title, category, bio, skills, hourlyRate, pricePerMinute,
       location, role, experience, github, linkedin, portfolio,
-      isAvailable, introVideo, availabilitySchedule,
+      isAvailable, introVideo, exclusiveContent, availabilitySchedule,
     } = req.body;
 
     const updateData = {
       name, title, category, bio, location, role, experience,
-      github, linkedin, portfolio, introVideo,
+      github, linkedin, portfolio, introVideo, exclusiveContent,
       isAvailable: isAvailable === "true" || isAvailable === true,
     };
 
@@ -149,6 +151,56 @@ router.post("/favorite/:expertId", authMiddleware, async (req, res) => {
       .select("-password")
       .populate("favorites", "name email profileImage title hourlyRate");
     res.json(updatedUser);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+router.post("/follow/:expertId", authMiddleware, async (req, res) => {
+  try {
+    const expert = await User.findById(req.params.expertId);
+    if (!expert) return res.status(404).json({ message: "Expert not found" });
+    if (expert._id.toString() === req.user.id) {
+      return res.status(400).json({ message: "You cannot follow your own profile" });
+    }
+
+    const isFollowing = expert.followers.some(id => id.toString() === req.user.id);
+    if (isFollowing) expert.followers.pull(req.user.id);
+    else expert.followers.addToSet(req.user.id);
+
+    await expert.save();
+    const updatedExpert = await User.findById(expert._id).select(safeProfileSelect);
+    res.json({
+      message: isFollowing ? "Unfollowed expert" : "Following expert",
+      expert: updatedExpert,
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+router.post("/subscribe/:expertId", authMiddleware, async (req, res) => {
+  try {
+    const expert = await User.findById(req.params.expertId);
+    if (!expert) return res.status(404).json({ message: "Expert not found" });
+    if (expert._id.toString() === req.user.id) {
+      return res.status(400).json({ message: "You cannot subscribe to your own profile" });
+    }
+
+    const isSubscribed = expert.subscribers.some(id => id.toString() === req.user.id);
+    if (isSubscribed) {
+      expert.subscribers.pull(req.user.id);
+    } else {
+      expert.subscribers.addToSet(req.user.id);
+      expert.followers.addToSet(req.user.id);
+    }
+
+    await expert.save();
+    const updatedExpert = await User.findById(expert._id).select(safeProfileSelect);
+    res.json({
+      message: isSubscribed ? "Subscription removed" : "Subscribed to exclusive content",
+      expert: updatedExpert,
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

@@ -17,6 +17,8 @@ const safeUser = (user) => ({
   role: user.role,
   profileImage: user.profileImage,
   isEmailVerified: user.isEmailVerified,
+  isApproved: user.isApproved,
+  isBlocked: user.isBlocked,
   isProfileComplete: user.isProfileComplete,
   title: user.title,
   category: user.category,
@@ -133,6 +135,10 @@ exports.login = async (req, res) => {
     const user = await User.findOne({ email });
     if (!user) {
       return res.status(400).json({ message: "No account found with this email." });
+    }
+
+    if (user.isBlocked) {
+      return res.status(403).json({ message: "Your account has been blocked by admin." });
     }
 
     // Google-only users have no password
@@ -303,6 +309,10 @@ exports.googleLogin = async (req, res) => {
         password: null,
       });
     } else {
+      if (user.isBlocked) {
+        return res.status(403).json({ message: "Your account has been blocked by admin." });
+      }
+
       // Existing user — link Google account if not already linked
       if (!user.googleId) {
         user.googleId = payload.sub;

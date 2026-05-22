@@ -1,0 +1,7 @@
+
+> backend@1.0.0 start
+> node server.js
+
+◇ injected env (9) from .env // tip: ⌁ auth for agents [www.vestauth.com]
+Server running on port 5000
+MongoDB Connected

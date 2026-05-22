@@ -24,6 +24,7 @@ router.post("/create-order", authMiddleware, async (req, res) => {
     // Verify expert availability and role
     const expert = await User.findById(expertId);
     if (!expert) return res.status(404).json({ message: "Expert not found" });
+    const client = await User.findById(req.user.id).select("subscriptionPlan");
 
     // Create Booking in DB (Pending status by default)
     const booking = await Booking.create({
@@ -33,6 +34,7 @@ router.post("/create-order", authMiddleware, async (req, res) => {
       duration,
       totalPrice,
       notes,
+      isPriority: client?.subscriptionPlan === "premium",
       meetingLink: `/video-call/room_${Math.random().toString(36).substring(2, 9)}` // Auto-generate room link
     });
 
@@ -128,7 +130,7 @@ router.get("/my-bookings", authMiddleware, async (req, res) => {
       $or: [{ client: req.user.id }, { expert: req.user.id }]
     })
       .populate("client expert", "name email profileImage title rating reviewsCount")
-      .sort({ date: 1 });
+      .sort({ isPriority: -1, date: 1 });
     res.json(bookings);
   } catch (error) {
     res.status(500).json({ message: error.message });

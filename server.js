@@ -63,6 +63,7 @@ app.use("/api/reviews", require("./routes/reviewRoutes"));
 app.use("/api/admin", require("./routes/adminRoutes"));
 app.use("/api/payments", require("./routes/paymentRoutes"));
 app.use("/api/chat", require("./routes/chatRoutes"));
+app.use("/api/live", require("./routes/liveRoutes"));
 
 app.get("/", (req, res) => {
   res.send("Backend Running OK");
@@ -82,6 +83,38 @@ const io = new Server(server, {
     credentials: true,
   },
 });
+
+app.set("io", io);
+
+const LiveStream = require("./models/LiveStream");
+const liveViewers = new Map();
+
+const emitLiveViewerCount = async (roomId) => {
+  const viewerCount = liveViewers.get(roomId)?.size || 0;
+  io.to(roomId).emit("live:viewers", { roomId, viewerCount });
+
+  try {
+    const stream = await LiveStream.findOne({ roomId, status: "live" });
+    if (stream) {
+      stream.viewerCount = viewerCount;
+      stream.peakViewers = Math.max(stream.peakViewers || 0, viewerCount);
+      await stream.save();
+    }
+  } catch (error) {
+    console.error("Live viewer count update error:", error.message);
+  }
+};
+
+const removeSocketFromLiveRooms = async (socket) => {
+  const updates = [];
+  liveViewers.forEach((viewers, roomId) => {
+    if (viewers.delete(socket.id)) {
+      if (viewers.size === 0) liveViewers.delete(roomId);
+      updates.push(emitLiveViewerCount(roomId));
+    }
+  });
+  await Promise.all(updates);
+};
 
 // Socket.io connection handling
 io.on('connection', (socket) => {
@@ -122,7 +155,27 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('disconnect', () => {
+  socket.on("live:join", async ({ roomId }) => {
+    if (!roomId) return;
+    socket.join(roomId);
+    if (!liveViewers.has(roomId)) liveViewers.set(roomId, new Set());
+    liveViewers.get(roomId).add(socket.id);
+    await emitLiveViewerCount(roomId);
+  });
+
+  socket.on("live:leave", async ({ roomId }) => {
+    if (!roomId) return;
+    socket.leave(roomId);
+    const viewers = liveViewers.get(roomId);
+    if (viewers) {
+      viewers.delete(socket.id);
+      if (viewers.size === 0) liveViewers.delete(roomId);
+    }
+    await emitLiveViewerCount(roomId);
+  });
+
+  socket.on('disconnect', async () => {
+    await removeSocketFromLiveRooms(socket);
     console.log('🔌 Socket disconnected:', socket.id);
   });
 });

@@ -38,6 +38,7 @@ const userSchema = new mongoose.Schema({
 
   // ─── Intro Video ───────────────────────────────────────
   introVideo: { type: String, default: "" },    // YouTube / Vimeo URL
+  exclusiveContent: { type: String, default: "" },
 
   // ─── Portfolio Gallery ─────────────────────────────────
   portfolioGallery: [{ type: String }],          // array of /uploads/... paths
@@ -64,6 +65,7 @@ const userSchema = new mongoose.Schema({
   // ─── Verification & Onboarding ─────────────────────────
   isApproved: { type: Boolean, default: false },
   isProfileComplete: { type: Boolean, default: false },
+  isBlocked: { type: Boolean, default: false },
 
   // ─── Rating System ─────────────────────────────────────
   rating: { type: Number, default: 5 },
@@ -74,9 +76,13 @@ const userSchema = new mongoose.Schema({
 
   // ─── Favorites ─────────────────────────────────────────
   favorites: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
+  followers: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
+  subscribers: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
 
   // ─── Wallet & Subscriptions ────────────────────────────
   walletBalance: { type: Number, default: 0 },
+  coinBalance: { type: Number, default: 250 },
+  lastCoinClaimAt: { type: Date, default: null },
   subscriptionPlan: { type: String, enum: ["free", "pro", "premium"], default: "free" },
   subscriptionExpiresAt: { type: Date, default: null },
 

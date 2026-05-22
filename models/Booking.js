@@ -6,6 +6,7 @@ const bookingSchema = new mongoose.Schema({
   date: { type: Date, required: true },
   duration: { type: Number, default: 1 }, // in hours
   totalPrice: { type: Number, required: true },
+  isPriority: { type: Boolean, default: false },
   status: { 
     type: String, 
     enum: ["pending", "confirmed", "completed", "cancelled"], 
