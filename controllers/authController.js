@@ -5,8 +5,26 @@ const crypto = require("crypto");
 const sendEmail = require("../config/email");
 
 // ─── Helper: Generate JWT ────────────────────────────────────────────────────
-const generateToken = (userId) => {
-  return jwt.sign({ id: userId }, process.env.JWT_SECRET, { expiresIn: "7d" });
+const hashValue = (value) => crypto.createHash("sha256").update(String(value)).digest("hex");
+
+const getSessionFingerprint = (req) => hashValue(req.headers["user-agent"] || "unknown-device");
+
+const generateToken = (userId, sessionId, fingerprintHash) => {
+  return jwt.sign(
+    { id: userId, sid: sessionId, fp: fingerprintHash },
+    process.env.JWT_SECRET || "secretkey",
+    { expiresIn: "7d" }
+  );
+};
+
+const startProtectedSession = async (user, req) => {
+  const sessionId = crypto.randomBytes(24).toString("hex");
+  const fingerprintHash = getSessionFingerprint(req);
+  user.activeSessionId = sessionId;
+  user.sessionFingerprintHash = fingerprintHash;
+  user.lastLoginAt = new Date();
+  await user.save();
+  return generateToken(user._id, sessionId, fingerprintHash);
 };
 
 // ─── Helper: Safe user object (strip sensitive fields) ───────────────────────
@@ -38,6 +56,14 @@ const safeUser = (user) => ({
   rating: user.rating,
   reviewsCount: user.reviewsCount,
   favorites: user.favorites,
+  followers: user.followers,
+  subscribers: user.subscribers,
+  walletBalance: user.walletBalance,
+  coinBalance: user.coinBalance,
+  subscriptionPlan: user.subscriptionPlan,
+  subscriptionExpiresAt: user.subscriptionExpiresAt,
+  sessionProtectionEnabled: user.sessionProtectionEnabled,
+  lastLoginAt: user.lastLoginAt,
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -160,7 +186,7 @@ exports.login = async (req, res) => {
       return res.status(400).json({ message: "Incorrect password." });
     }
 
-    const token = generateToken(user._id);
+    const token = await startProtectedSession(user, req);
 
     res.json({
       message: "Login successful",
@@ -169,6 +195,130 @@ exports.login = async (req, res) => {
     });
   } catch (err) {
     console.error("Login error:", err);
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// REQUEST OTP LOGIN
+// POST /api/auth/request-otp
+exports.requestOtp = async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ message: "Email is required." });
+
+    const user = await User.findOne({ email });
+    const genericMessage = "If this email is registered, a login OTP has been sent.";
+
+    if (!user || user.isBlocked) {
+      return res.json({ message: genericMessage });
+    }
+
+    if (!user.isEmailVerified) {
+      return res.status(403).json({
+        message: "Please verify your email before requesting OTP login.",
+        needsVerification: true,
+      });
+    }
+
+    const otp = String(crypto.randomInt(100000, 999999));
+    user.otpLoginHash = hashValue(otp);
+    user.otpLoginExpires = new Date(Date.now() + 10 * 60 * 1000);
+    user.otpLoginAttempts = 0;
+    await user.save();
+
+    let debugOtp;
+    try {
+      await sendEmail({
+        to: email,
+        subject: "Your login OTP",
+        html: `
+          <div style="font-family:Arial,sans-serif;max-width:520px;margin:auto;padding:32px;background:#0f172a;color:#e2e8f0;border-radius:16px;">
+            <h2 style="color:#818cf8;margin-bottom:8px;">Login OTP</h2>
+            <p style="color:#94a3b8;">Use this one-time code to sign in. It expires in <strong>10 minutes</strong>.</p>
+            <div style="font-size:32px;letter-spacing:8px;font-weight:bold;color:#fff;background:#1e293b;padding:18px;border-radius:12px;text-align:center;margin:24px 0;">${otp}</div>
+            <p style="color:#64748b;font-size:13px;">If you did not request this code, ignore this email.</p>
+          </div>
+        `,
+      });
+    } catch (emailError) {
+      console.error("OTP email error:", emailError.message);
+      if (process.env.NODE_ENV !== "production") debugOtp = otp;
+      else throw emailError;
+    }
+
+    res.json({
+      message: genericMessage,
+      ...(debugOtp ? { debugOtp } : {}),
+    });
+  } catch (err) {
+    console.error("RequestOtp error:", err);
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// VERIFY OTP LOGIN
+// POST /api/auth/verify-otp
+exports.verifyOtp = async (req, res) => {
+  try {
+    const { email, otp } = req.body;
+    if (!email || !otp) return res.status(400).json({ message: "Email and OTP are required." });
+
+    const user = await User.findOne({ email });
+    if (!user || !user.otpLoginHash || !user.otpLoginExpires) {
+      return res.status(400).json({ message: "Invalid or expired OTP." });
+    }
+
+    if (user.isBlocked) {
+      return res.status(403).json({ message: "Your account has been blocked by admin." });
+    }
+
+    if (user.otpLoginExpires.getTime() < Date.now()) {
+      user.otpLoginHash = null;
+      user.otpLoginExpires = null;
+      user.otpLoginAttempts = 0;
+      await user.save();
+      return res.status(400).json({ message: "OTP has expired. Please request a new one." });
+    }
+
+    if (user.otpLoginAttempts >= 5) {
+      return res.status(429).json({ message: "Too many OTP attempts. Please request a new code." });
+    }
+
+    const isMatch = user.otpLoginHash === hashValue(otp);
+    if (!isMatch) {
+      user.otpLoginAttempts += 1;
+      await user.save();
+      return res.status(400).json({ message: "Incorrect OTP." });
+    }
+
+    user.otpLoginHash = null;
+    user.otpLoginExpires = null;
+    user.otpLoginAttempts = 0;
+    const token = await startProtectedSession(user, req);
+
+    res.json({
+      message: "OTP login successful",
+      token,
+      user: safeUser(user),
+    });
+  } catch (err) {
+    console.error("VerifyOtp error:", err);
+    res.status(500).json({ message: err.message });
+  }
+};
+
+exports.getSessionStatus = async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ message: "User not found" });
+    res.json({
+      sessionProtectionEnabled: user.sessionProtectionEnabled,
+      lastLoginAt: user.lastLoginAt,
+      activeSession: Boolean(user.activeSessionId),
+      encryption: "Client-side AES-GCM tools are available on the Security page.",
+      rateLimiting: "Enabled for sensitive API routes.",
+    });
+  } catch (err) {
     res.status(500).json({ message: err.message });
   }
 };
@@ -324,7 +474,7 @@ exports.googleLogin = async (req, res) => {
       await user.save();
     }
 
-    const token = generateToken(user._id);
+    const token = await startProtectedSession(user, req);
 
     res.json({
       message: "Google login successful",

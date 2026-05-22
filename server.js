@@ -5,6 +5,7 @@ const path = require("path");
 const http = require("http");
 const { Server } = require("socket.io");
 const connectDB = require("./config/db");
+const rateLimit = require("./middleware/rateLimiter");
 
 // LOAD ENV
 dotenv.config({ path: path.join(__dirname, ".env") });
@@ -49,6 +50,7 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 app.use("/uploads", express.static("uploads"));
+app.use("/api", rateLimit({ windowMs: 60 * 1000, max: 240, keyPrefix: "api" }));
 
 // ROUTES
 app.use("/api/auth", require("./routes/authRoutes"));

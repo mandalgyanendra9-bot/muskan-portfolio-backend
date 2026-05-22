@@ -26,6 +26,15 @@ const userSchema = new mongoose.Schema({
   resetPasswordToken: { type: String, default: null },
   resetPasswordExpires: { type: Date, default: null },
 
+  // Security
+  otpLoginHash: { type: String, default: null },
+  otpLoginExpires: { type: Date, default: null },
+  otpLoginAttempts: { type: Number, default: 0 },
+  activeSessionId: { type: String, default: null },
+  sessionFingerprintHash: { type: String, default: null },
+  sessionProtectionEnabled: { type: Boolean, default: true },
+  lastLoginAt: { type: Date, default: null },
+
   // ─── Professional Details ──────────────────────────────
   title: { type: String, default: "Professional" },
   category: { type: String, default: "" },      // e.g. "Web Development", "Design"
