@@ -4,7 +4,7 @@ const transactionSchema = new mongoose.Schema({
   user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
   type: {
     type: String,
-    enum: ["wallet_topup", "booking_payment", "subscription", "withdrawal"],
+    enum: ["wallet_topup", "booking_payment", "subscription", "withdrawal", "payout"],
     required: true,
   },
   amount: { type: Number, required: true },

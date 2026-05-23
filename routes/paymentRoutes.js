@@ -4,6 +4,7 @@ const Razorpay = require("razorpay");
 const crypto = require("crypto");
 const Transaction = require("../models/Transaction");
 const User = require("../models/User");
+const Payout = require("../models/Payout");
 const Booking = require("../models/Booking");
 const authMiddleware = require("../middleware/authMiddleware");
 
@@ -102,11 +103,32 @@ router.post("/verify", authMiddleware, async (req, res) => {
         booking.paymentStatus = "paid";
         booking.paymentId = razorpay_payment_id;
         await booking.save();
-        
-        // Add money to Expert's wallet! (Minus platform fee if any, skipping fee for now)
+
+        // Create payout record for expert
         const expert = await User.findById(booking.expert);
         if (expert) {
-          expert.walletBalance += transaction.amount;
+          const commissionRate = 0.10; // 10% platform fee
+          const commission = transaction.amount * commissionRate;
+          const netAmount = transaction.amount - commission;
+
+          const payout = await Payout.create({
+            expert: expert._id,
+            amount: transaction.amount,
+            commission,
+            netAmount,
+            status: "pending",
+          });
+
+          // Increment completed paid bookings counter
+          expert.completedPaidBookings = (expert.completedPaidBookings || 0) + 1;
+
+          // Auto‑pay for verified experts with sufficient history
+          if (expert.verifiedExpert && expert.completedPaidBookings >= 5) {
+            payout.status = "paid";
+            await payout.save();
+            expert.walletBalance += netAmount;
+          }
+
           await expert.save();
         }
       }
@@ -169,7 +191,7 @@ router.post("/withdraw", authMiddleware, async (req, res) => {
 router.post("/pay-wallet", authMiddleware, async (req, res) => {
   try {
     const { amount, bookingId } = req.body;
-    
+
     const user = await User.findById(req.user.id);
     if (user.walletBalance < amount) {
       return res.status(400).json({ message: "Insufficient wallet balance" });
@@ -194,13 +216,31 @@ router.post("/pay-wallet", authMiddleware, async (req, res) => {
       
       const expert = await User.findById(booking.expert);
       if (expert) {
-        expert.walletBalance += amount;
+        const commissionRate = 0.10;
+        const commission = amount * commissionRate;
+        const netAmount = amount - commission;
+
+        const payout = await Payout.create({
+          expert: expert._id,
+          amount,
+          commission,
+          netAmount,
+          status: "pending",
+        });
+
+        expert.completedPaidBookings = (expert.completedPaidBookings || 0) + 1;
+        if (expert.verifiedExpert && expert.completedPaidBookings >= 5) {
+          payout.status = "paid";
+          await payout.save();
+          expert.walletBalance += netAmount;
+        }
         await expert.save();
       }
     }
 
     res.json({ message: "Paid from wallet successfully", user });
   } catch (error) {
+    console.error('Pay Wallet error:', error);
     res.status(500).json({ message: error.message });
   }
 });

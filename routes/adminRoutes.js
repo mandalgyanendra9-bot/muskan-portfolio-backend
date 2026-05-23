@@ -4,24 +4,13 @@ const User = require("../models/User");
 const Booking = require("../models/Booking");
 const Message = require("../models/Message");
 const authMiddleware = require("../middleware/authMiddleware");
+const adminMiddleware = require("../middleware/adminMiddleware");
+const { isAdminEmail } = require("../utils/adminAccess");
 
 const BOOKING_STATUSES = ["pending", "confirmed", "completed", "cancelled"];
 const PAYMENT_STATUSES = ["unpaid", "paid", "refunded"];
 
-// Admin Role Check Middleware
-const adminCheck = async (req, res, next) => {
-  try {
-    const user = req.authUser || await User.findById(req.user.id).select("role");
-    if (!user || user.role !== "admin") {
-      return res.status(403).json({ message: "Admin resource. Access denied." });
-    }
-    next();
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-};
-
-const adminOnly = [authMiddleware, adminCheck];
+const adminOnly = [authMiddleware, adminMiddleware];
 
 const bookingPopulateFields = "name email profileImage title role";
 
@@ -40,7 +29,7 @@ router.put("/user/:id/block", adminOnly, async (req, res) => {
   try {
     const user = await User.findById(req.params.id);
     if (!user) return res.status(404).json({ message: "User not found" });
-    if (user.role === "admin") {
+    if (isAdminEmail(user.email)) {
       return res.status(400).json({ message: "Admin accounts cannot be blocked" });
     }
 
@@ -101,7 +90,7 @@ router.delete("/user/:id", adminOnly, async (req, res) => {
   try {
     const user = await User.findById(req.params.id);
     if (!user) return res.status(404).json({ message: "User not found" });
-    if (user.role === "admin") {
+    if (isAdminEmail(user.email)) {
       return res.status(400).json({ message: "Admin accounts cannot be deleted" });
     }
 
@@ -221,7 +210,7 @@ router.get("/analytics", adminOnly, async (req, res) => {
     ] = await Promise.all([
       User.countDocuments(),
       User.countDocuments({ role: "expert" }),
-      User.countDocuments({ role: { $in: ["client", "user"] } }),
+      User.countDocuments({ role: "client" }),
       Booking.countDocuments(),
       Booking.countDocuments({ paymentStatus: "paid" }),
       User.countDocuments({ role: "expert", isApproved: true }),

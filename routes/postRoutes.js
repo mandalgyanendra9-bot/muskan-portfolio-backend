@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const Post = require("../models/Post");
 const authMiddleware = require("../middleware/authMiddleware");
+const adminMiddleware = require("../middleware/adminMiddleware");
 const upload = require("../middleware/Upload");
 
 // GET ALL POSTS
@@ -25,7 +26,7 @@ router.get("/:id", async (req, res) => {
 });
 
 // CREATE POST (Admin)
-router.post("/", authMiddleware, upload.single("image"), async (req, res) => {
+router.post("/", authMiddleware, adminMiddleware, upload.single("image"), async (req, res) => {
   try {
     const { title, content, excerpt, category } = req.body;
     const image = req.file ? `/uploads/${req.file.filename}` : null;
@@ -37,7 +38,7 @@ router.post("/", authMiddleware, upload.single("image"), async (req, res) => {
 });
 
 // UPDATE POST (Admin)
-router.put("/:id", authMiddleware, upload.single("image"), async (req, res) => {
+router.put("/:id", authMiddleware, adminMiddleware, upload.single("image"), async (req, res) => {
   try {
     const { title, content, excerpt, category } = req.body;
     const updateData = { title, content, excerpt, category };
@@ -51,7 +52,7 @@ router.put("/:id", authMiddleware, upload.single("image"), async (req, res) => {
 });
 
 // DELETE POST (Admin)
-router.delete("/:id", authMiddleware, async (req, res) => {
+router.delete("/:id", authMiddleware, adminMiddleware, async (req, res) => {
   try {
     await Post.findByIdAndDelete(req.params.id);
     res.json({ message: "Post deleted" });

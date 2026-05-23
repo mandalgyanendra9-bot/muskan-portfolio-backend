@@ -1,6 +1,8 @@
 const express = require("express");
 const router = express.Router();
 const Visitor = require("../models/Visitor");
+const authMiddleware = require("../middleware/authMiddleware");
+const adminMiddleware = require("../middleware/adminMiddleware");
 
 // TRACK VISITOR
 router.post("/hit", async (req, res) => {
@@ -20,7 +22,7 @@ router.post("/hit", async (req, res) => {
 });
 
 // GET STATS (Admin only)
-router.get("/stats", async (req, res) => {
+router.get("/stats", authMiddleware, adminMiddleware, async (req, res) => {
   try {
     const visitor = await Visitor.findOne();
     res.json({ count: visitor ? visitor.count : 0 });

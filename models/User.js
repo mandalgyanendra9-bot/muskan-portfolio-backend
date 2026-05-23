@@ -13,7 +13,7 @@ const userSchema = new mongoose.Schema({
   password: { type: String, default: null },
 
   profileImage: { type: String, default: "" },
-  role: { type: String, enum: ["client", "user", "admin", "expert"], default: "client" },
+  role: { type: String, enum: ["admin", "expert", "client"], default: "client" },
 
   // ─── Google OAuth ──────────────────────────────────────
   googleId: { type: String, default: null },
@@ -95,7 +95,20 @@ const userSchema = new mongoose.Schema({
   subscriptionPlan: { type: String, enum: ["free", "pro", "premium"], default: "free" },
   subscriptionExpiresAt: { type: Date, default: null },
 
+  completedPaidBookings: { type: Number, default: 0 },
+  verifiedExpert: { type: Boolean, default: false },
   createdAt: { type: Date, default: Date.now },
+  // ─── Payout / Financial Details ─────────────────────
+  upiId: { type: String, default: "" },
+  bankDetails: {
+    accountNumber: { type: String, default: "" },
+    ifsc: { type: String, default: "" },
+    bankName: { type: String, default: "" },
+  },
+  kycDocumentUrl: { type: String, default: "" },
+  payoutPreference: { type: String, enum: ["manual","auto"], default: "manual" },
+  payoutStatus: { type: String, enum: ["pending","approved","paid","rejected"], default: "pending" },
+  isKycVerified: { type: Boolean, default: false },
 });
 
 module.exports = mongoose.model("User", userSchema);

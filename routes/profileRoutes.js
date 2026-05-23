@@ -3,6 +3,7 @@ const router = express.Router();
 const User = require("../models/User");
 const authMiddleware = require("../middleware/authMiddleware");
 const upload = require("../middleware/Upload");
+const { isAdminEmail } = require("../utils/adminAccess");
 
 const safeProfileSelect = "-password -emailVerifyToken -resetPasswordToken -resetPasswordExpires";
 
@@ -57,11 +58,22 @@ router.put("/update", authMiddleware, upload.single("profileImage"), async (req,
       isAvailable, introVideo, exclusiveContent, availabilitySchedule,
     } = req.body;
 
+    const requestedRole = role ? String(role).trim().toLowerCase() : undefined;
+    if (requestedRole && !["client", "expert"].includes(requestedRole)) {
+      return res.status(400).json({ message: "Invalid account role." });
+    }
+
     const updateData = {
-      name, title, category, bio, location, role, experience,
+      name, title, category, bio, location, experience,
       github, linkedin, portfolio, introVideo, exclusiveContent,
       isAvailable: isAvailable === "true" || isAvailable === true,
     };
+
+    if (isAdminEmail(req.authUser?.email)) {
+      updateData.role = "admin";
+    } else if (requestedRole) {
+      updateData.role = requestedRole;
+    }
 
     if (hourlyRate !== undefined) updateData.hourlyRate = Number(hourlyRate);
     if (pricePerMinute !== undefined) updateData.pricePerMinute = Number(pricePerMinute);

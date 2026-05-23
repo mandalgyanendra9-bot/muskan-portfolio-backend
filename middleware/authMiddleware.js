@@ -21,7 +21,7 @@ const authMiddleware = async (req, res, next) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET || "secretkey");
     req.user = decoded;
     const user = await User.findById(decoded.id).select(
-      "role isBlocked activeSessionId sessionFingerprintHash sessionProtectionEnabled"
+      "email role isBlocked activeSessionId sessionFingerprintHash sessionProtectionEnabled"
     );
     if (!user) {
       return res.status(401).json({ message: "User account no longer exists" });

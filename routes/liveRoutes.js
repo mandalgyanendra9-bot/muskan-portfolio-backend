@@ -3,6 +3,7 @@ const router = express.Router();
 const LiveStream = require("../models/LiveStream");
 const User = require("../models/User");
 const authMiddleware = require("../middleware/authMiddleware");
+const { isAdminEmail } = require("../utils/adminAccess");
 
 const safeUserSelect = "name email profileImage title role coinBalance walletBalance subscriptionPlan";
 
@@ -99,9 +100,9 @@ router.put("/:id/end", authMiddleware, async (req, res) => {
     const stream = await LiveStream.findById(req.params.id);
     if (!stream) return res.status(404).json({ message: "Live stream not found" });
 
-    const user = await User.findById(req.user.id).select("role");
+    const user = await User.findById(req.user.id).select("email role");
     const isHost = stream.host.toString() === req.user.id;
-    const isAdmin = user?.role === "admin";
+    const isAdmin = user?.role === "admin" && isAdminEmail(user.email);
     if (!isHost && !isAdmin) {
       return res.status(403).json({ message: "Only the host can end this live stream" });
     }

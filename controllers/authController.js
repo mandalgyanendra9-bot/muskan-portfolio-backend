@@ -3,6 +3,7 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 const sendEmail = require("../config/email");
+const { normalizeEmail, normalizeRoleForEmail } = require("../utils/adminAccess");
 
 // ─── Helper: Generate JWT ────────────────────────────────────────────────────
 const hashValue = (value) => crypto.createHash("sha256").update(String(value)).digest("hex");
@@ -72,13 +73,14 @@ const safeUser = (user) => ({
 // ─────────────────────────────────────────────────────────────────────────────
 exports.register = async (req, res) => {
   try {
-    const { name, email, password, role } = req.body;
+    const { name, email, password } = req.body;
 
     if (!name || !email || !password) {
       return res.status(400).json({ message: "Name, email and password are required." });
     }
 
-    const userExist = await User.findOne({ email });
+    const emailAddress = normalizeEmail(email);
+    const userExist = await User.findOne({ email: emailAddress });
     if (userExist) {
       return res.status(400).json({ message: "An account with this email already exists." });
     }
@@ -88,9 +90,9 @@ exports.register = async (req, res) => {
 
     await User.create({
       name,
-      email,
+      email: emailAddress,
       password: hashedPassword,
-      role: role || "client",
+      role: normalizeRoleForEmail(emailAddress),
       emailVerifyToken,
       isEmailVerified: false,
     });
@@ -98,7 +100,7 @@ exports.register = async (req, res) => {
     // Send verification email
     const verifyUrl = `${process.env.CLIENT_URL}/verify-email/${emailVerifyToken}`;
     await sendEmail({
-      to: email,
+      to: emailAddress,
       subject: "✅ Verify Your Email — Portfolio",
       html: `
         <div style="font-family:Arial,sans-serif;max-width:520px;margin:auto;padding:32px;background:#0f172a;color:#e2e8f0;border-radius:16px;">
@@ -158,7 +160,8 @@ exports.login = async (req, res) => {
       return res.status(400).json({ message: "Email and password are required." });
     }
 
-    const user = await User.findOne({ email });
+    const emailAddress = normalizeEmail(email);
+    const user = await User.findOne({ email: emailAddress });
     if (!user) {
       return res.status(400).json({ message: "No account found with this email." });
     }
@@ -186,6 +189,9 @@ exports.login = async (req, res) => {
       return res.status(400).json({ message: "Incorrect password." });
     }
 
+    const secureRole = normalizeRoleForEmail(user.email, user.role);
+    if (user.role !== secureRole) user.role = secureRole;
+
     const token = await startProtectedSession(user, req);
 
     res.json({
@@ -206,7 +212,8 @@ exports.requestOtp = async (req, res) => {
     const { email } = req.body;
     if (!email) return res.status(400).json({ message: "Email is required." });
 
-    const user = await User.findOne({ email });
+    const emailAddress = normalizeEmail(email);
+    const user = await User.findOne({ email: emailAddress });
     const genericMessage = "If this email is registered, a login OTP has been sent.";
 
     if (!user || user.isBlocked) {
@@ -229,7 +236,7 @@ exports.requestOtp = async (req, res) => {
     let debugOtp;
     try {
       await sendEmail({
-        to: email,
+        to: emailAddress,
         subject: "Your login OTP",
         html: `
           <div style="font-family:Arial,sans-serif;max-width:520px;margin:auto;padding:32px;background:#0f172a;color:#e2e8f0;border-radius:16px;">
@@ -263,7 +270,8 @@ exports.verifyOtp = async (req, res) => {
     const { email, otp } = req.body;
     if (!email || !otp) return res.status(400).json({ message: "Email and OTP are required." });
 
-    const user = await User.findOne({ email });
+    const emailAddress = normalizeEmail(email);
+    const user = await User.findOne({ email: emailAddress });
     if (!user || !user.otpLoginHash || !user.otpLoginExpires) {
       return res.status(400).json({ message: "Invalid or expired OTP." });
     }
@@ -294,6 +302,8 @@ exports.verifyOtp = async (req, res) => {
     user.otpLoginHash = null;
     user.otpLoginExpires = null;
     user.otpLoginAttempts = 0;
+    const secureRole = normalizeRoleForEmail(user.email, user.role);
+    if (user.role !== secureRole) user.role = secureRole;
     const token = await startProtectedSession(user, req);
 
     res.json({
@@ -335,7 +345,8 @@ exports.forgotPassword = async (req, res) => {
       return res.status(400).json({ message: "Email is required." });
     }
 
-    const user = await User.findOne({ email });
+    const emailAddress = normalizeEmail(email);
+    const user = await User.findOne({ email: emailAddress });
 
     // Always return same message to prevent email enumeration
     const successMsg = "If this email is registered, you'll receive a password reset link shortly.";
@@ -351,7 +362,7 @@ exports.forgotPassword = async (req, res) => {
 
     const resetUrl = `${process.env.CLIENT_URL}/reset-password/${resetToken}`;
     await sendEmail({
-      to: email,
+      to: emailAddress,
       subject: "🔐 Password Reset Request — Portfolio",
       html: `
         <div style="font-family:Arial,sans-serif;max-width:520px;margin:auto;padding:32px;background:#0f172a;color:#e2e8f0;border-radius:16px;">
@@ -444,18 +455,20 @@ exports.googleLogin = async (req, res) => {
       return res.status(400).json({ message: "Token audience mismatch." });
     }
 
+    const emailAddress = normalizeEmail(payload.email);
+
     // Find or create user
-    let user = await User.findOne({ email: payload.email });
+    let user = await User.findOne({ email: emailAddress });
 
     if (!user) {
       // New user — create from Google profile
       user = await User.create({
         name: payload.name,
-        email: payload.email,
+        email: emailAddress,
         profileImage: payload.picture || "",
         googleId: payload.sub,
         isEmailVerified: true, // Google already verified the email
-        role: "client",
+        role: normalizeRoleForEmail(emailAddress),
         password: null,
       });
     } else {
@@ -471,6 +484,8 @@ exports.googleLogin = async (req, res) => {
       if (!user.profileImage && payload.picture) {
         user.profileImage = payload.picture;
       }
+      const secureRole = normalizeRoleForEmail(user.email, user.role);
+      if (user.role !== secureRole) user.role = secureRole;
       await user.save();
     }
 

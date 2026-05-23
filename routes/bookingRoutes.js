@@ -5,6 +5,7 @@ const User = require("../models/User");
 const authMiddleware = require("../middleware/authMiddleware");
 const Razorpay = require("razorpay");
 const crypto = require("crypto");
+const { isAdminEmail } = require("../utils/adminAccess");
 
 let razorpay;
 if (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
@@ -153,8 +154,8 @@ router.put("/:id/status", authMiddleware, async (req, res) => {
     const isExpert = booking.expert.toString() === req.user.id;
     
     // Admin check
-    const user = await User.findById(req.user.id);
-    const isAdmin = user && user.role === "admin";
+    const user = await User.findById(req.user.id).select("email role");
+    const isAdmin = user?.role === "admin" && isAdminEmail(user.email);
 
     if (!isClient && !isExpert && !isAdmin) {
       return res.status(403).json({ message: "You are not authorized to edit this booking" });
