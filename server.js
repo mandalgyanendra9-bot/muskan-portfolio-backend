@@ -76,6 +76,7 @@ app.get("/", (req, res) => {
 const server = http.createServer(app);
 
 // Initialize Socket.io with CORS matching allowed origins
+const ChatRoom = require('./models/ChatRoom');
 const io = new Server(server, {
   cors: {
     origin: (origin, callback) => {
@@ -124,13 +125,55 @@ const removeSocketFromLiveRooms = async (socket) => {
 io.on('connection', (socket) => {
   console.log('🔌 New socket connection:', socket.id);
 
-  // Join a private room based on user ID (sent from client after auth)
+// Join a chat room based on booking ID and user ID (after auth)
+  socket.on('joinRoom', async ({ bookingId, userId }) => {
+    try {
+      const room = await ChatRoom.findOne({ booking: bookingId });
+      if (!room) {
+        socket.emit('error', 'Chat room not found');
+        return;
+      }
+      const participantIds = room.participants.map(p => p.toString());
+      if (!participantIds.includes(userId)) {
+        socket.emit('error', 'Unauthorized to join this chat');
+        return;
+      }
+      const roomName = `chat_${bookingId}`;
+      socket.join(roomName);
+      socket.bookingId = bookingId;
+      socket.userId = userId;
+      console.log(`User ${userId} joined chat room ${roomName}`);
+    } catch (err) {
+      console.error('joinRoom error:', err);
+    }
+  });
   socket.on('join', (userId) => {
     socket.join(userId);
     console.log(`User ${userId} joined room`);
   });
 
-  // Receive a chat message and broadcast to the recipient's room
+// Receive a chat message for a booking and broadcast to the room
+  socket.on('sendMessage', async ({ bookingId, content, messageType = 'text' }) => {
+    try {
+      const room = await ChatRoom.findOne({ booking: bookingId });
+      if (!room) {
+        socket.emit('error', 'Chat room not found');
+        return;
+      }
+      const msg = {
+        sender: socket.userId,
+        type: messageType,
+        content,
+        createdAt: new Date()
+      };
+      room.messages.push(msg);
+      await room.save();
+      const roomName = `chat_${bookingId}`;
+      io.to(roomName).emit('newMessage', { ...msg, bookingId });
+    } catch (err) {
+      console.error('sendMessage error:', err);
+    }
+  });
   socket.on('chatMessage', async (msg) => {
     // msg: { sender, recipient, message, messageType }
     try {

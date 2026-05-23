@@ -5,6 +5,7 @@ const User = require("../models/User");
 const authMiddleware = require("../middleware/authMiddleware");
 const Razorpay = require("razorpay");
 const crypto = require("crypto");
+const ChatRoom = require('../models/ChatRoom');
 const { isAdminEmail } = require("../utils/adminAccess");
 
 let razorpay;
@@ -95,6 +96,13 @@ router.post("/verify-payment", authMiddleware, async (req, res) => {
         { new: true }
       ).populate("client expert", "name email profileImage title");
       
+      // Create ChatRoom for this booking if not exists
+      await ChatRoom.findOneAndUpdate(
+        { booking: booking._id },
+        { $setOnInsert: { booking: booking._id, participants: [booking.client, booking.expert] } },
+        { upsert: true, new: true }
+      );
+      
       return res.json({ message: "Demo Payment Successful & Confirmed!", booking });
     }
 
@@ -115,6 +123,14 @@ router.post("/verify-payment", authMiddleware, async (req, res) => {
         },
         { new: true }
       ).populate("client expert", "name email profileImage title");
+      
+      // Create ChatRoom for this booking if not exists
+      await ChatRoom.findOneAndUpdate(
+        { booking: booking._id },
+        { $setOnInsert: { booking: booking._id, participants: [booking.client, booking.expert] } },
+        { upsert: true, new: true }
+      );
+      
       res.json({ message: "Payment Verified Successfully", booking });
     } else {
       res.status(400).json({ message: "Invalid Signature" });
@@ -156,6 +172,7 @@ router.put("/:id/status", authMiddleware, async (req, res) => {
     // Admin check
     const user = await User.findById(req.user.id).select("email role");
     const isAdmin = user?.role === "admin" && isAdminEmail(user.email);
+
 
     if (!isClient && !isExpert && !isAdmin) {
       return res.status(403).json({ message: "You are not authorized to edit this booking" });
