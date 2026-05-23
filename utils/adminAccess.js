@@ -1,4 +1,4 @@
-const DEFAULT_ADMIN_EMAIL = "mandalgyanendra9@gmail.com";
+const DEFAULT_ADMIN_EMAIL = "mandalgyanu2823297@gmail.com";
 
 const normalizeEmail = (email) => String(email || "").trim().toLowerCase();
 

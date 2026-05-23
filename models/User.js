@@ -107,6 +107,7 @@ const userSchema = new mongoose.Schema({
   },
   kycDocumentUrl: { type: String, default: "" },
   payoutPreference: { type: String, enum: ["manual","auto"], default: "manual" },
+  pendingPayoutAmount: { type: Number, default: 0 },
   payoutStatus: { type: String, enum: ["pending","approved","paid","rejected"], default: "pending" },
   isKycVerified: { type: Boolean, default: false },
 });
