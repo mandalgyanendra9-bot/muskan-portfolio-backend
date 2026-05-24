@@ -7,7 +7,7 @@ const roleCheck = require('../middleware/roleCheck');
 const { generateSlotsForDate } = require('../utils/slotGenerator');
 
 // GET available slots for an expert on a given date
-router.get('/:expertId', authMiddleware, async (req, res) => {
+router.get('/:expertId', async (req, res) => {
   try {
     const { expertId } = req.params;
     const { date } = req.query; // expected format YYYY-MM-DD
