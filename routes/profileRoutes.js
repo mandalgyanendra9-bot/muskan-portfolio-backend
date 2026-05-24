@@ -53,6 +53,7 @@ router.get("/expert/:id", async (req, res) => {
 router.put("/update", authMiddleware, upload.single("profileImage"), async (req, res) => {
     console.log('Update payload:', req.body);
     if (req.file) console.log('Uploaded file:', req.file);
+try {
 
     const {
       name, title, category, bio, skills, hourlyRate, pricePerMinute,
