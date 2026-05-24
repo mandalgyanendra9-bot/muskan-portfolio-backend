@@ -51,7 +51,9 @@ router.get("/expert/:id", async (req, res) => {
 
 // ─── UPDATE PROFILE (text fields + optional DP) ──────────────────────────────
 router.put("/update", authMiddleware, upload.single("profileImage"), async (req, res) => {
-  try {
+    console.log('Update payload:', req.body);
+    if (req.file) console.log('Uploaded file:', req.file);
+
     const {
       name, title, category, bio, skills, hourlyRate, pricePerMinute,
       location, role, experience, github, linkedin, portfolio,
@@ -69,9 +71,8 @@ router.put("/update", authMiddleware, upload.single("profileImage"), async (req,
       isAvailable: isAvailable === "true" || isAvailable === true,
     };
 
-    if (isAdminEmail(req.authUser?.email)) {
-      updateData.role = "admin";
-    } else if (requestedRole) {
+    // Preserve existing role unless a valid new role is explicitly provided and differs from current
+    if (requestedRole && requestedRole !== req.authUser?.role) {
       updateData.role = requestedRole;
     }
 
