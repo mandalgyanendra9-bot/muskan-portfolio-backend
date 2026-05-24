@@ -14,18 +14,24 @@ router.get('/:expertId', authMiddleware, async (req, res) => {
     if (!date) return res.status(400).json({ message: 'date query param required' });
     const expert = await User.findById(expertId);
     if (!expert) return res.status(404).json({ message: 'Expert not found' });
+    // Ensure the user is an expert
+    if (expert.role !== 'expert') return res.status(400).json({ message: 'User is not an expert' });
     const allSlots = generateSlotsForDate(expert, date);
-    // Filter out already booked slots and past slots
+    // Define date range for the requested day
+    const dayStart = new Date(date);
+    const dayEnd = new Date(date);
+    dayEnd.setDate(dayEnd.getDate() + 1);
+    // Find bookings for this expert on the requested day
     const existing = await Booking.find({
       expert: expertId,
-      slotStart: { $gte: new Date() }
+      slotStart: { $gte: dayStart, $lt: dayEnd }
     }).select('slotStart slotEnd');
     const booked = existing.map(b => b.slotStart.getTime());
     const available = allSlots.filter(s => {
-    const slotStart = new Date(s.start);
-    const isBooked = booked.includes(slotStart.getTime());
-    return !isBooked && slotStart > new Date();
-  });
+      const slotStart = new Date(s.start);
+      const isBooked = booked.includes(slotStart.getTime());
+      return !isBooked && slotStart > new Date();
+    });
     res.json(available);
   } catch (err) {
     console.error(err);
