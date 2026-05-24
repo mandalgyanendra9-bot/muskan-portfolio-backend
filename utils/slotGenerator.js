@@ -9,7 +9,7 @@ function generateSlotsForDate(expert, dateStr) {
   const { availabilitySchedule, timezone = 'UTC', slotDuration = 30 } = expert;
   // Find the day of week name, e.g., 'Monday'
   const dayName = moment.tz(dateStr, timezone).format('dddd');
-  const dayEntry = availabilitySchedule.find(d => d.day === dayName && d.available);
+  const dayEntry = availabilitySchedule.find(d => d.day === dayName);
   if (!dayEntry) return [];
 
   // Build start and end moment objects in expert's timezone
