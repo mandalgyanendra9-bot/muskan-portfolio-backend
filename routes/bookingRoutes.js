@@ -3,7 +3,7 @@ const router = express.Router();
 const Booking = require("../models/Booking");
 const User = require("../models/User");
 const authMiddleware = require("../middleware/authMiddleware");
-const Razorpay = require("razorpay");
+const moment = require('moment');
 const crypto = require("crypto");
 const ChatRoom = require('../models/ChatRoom');
 const { isAdminEmail } = require("../utils/adminAccess");
@@ -32,7 +32,9 @@ router.post("/create-order", authMiddleware, async (req, res) => {
     const booking = await Booking.create({
       client: req.user.id,
       expert: expertId,
-      date,
+-      date,
++      slotStart: date,
++      slotEnd: moment(date).add(duration, 'minutes').toDate(),
       duration,
       totalPrice,
       notes,

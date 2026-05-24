@@ -66,6 +66,9 @@ const userSchema = new mongoose.Schema({
     ],
   },
 
+  timezone: { type: String, default: "UTC" },
+  slotDuration: { type: Number, default: 30 }, // minutes
+
   // ─── Social / Portfolio Links ──────────────────────────
   github: { type: String, default: "" },
   linkedin: { type: String, default: "" },

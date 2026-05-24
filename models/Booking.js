@@ -3,7 +3,8 @@ const mongoose = require("mongoose");
 const bookingSchema = new mongoose.Schema({
   client: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
   expert: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
-  date: { type: Date, required: true },
+  slotStart: { type: Date, required: true },
+  slotEnd: { type: Date, required: true },
   duration: { type: Number, default: 1 }, // in hours
   totalPrice: { type: Number, required: true },
   isPriority: { type: Boolean, default: false },
