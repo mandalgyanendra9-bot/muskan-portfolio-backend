@@ -21,7 +21,11 @@ router.get('/:expertId', authMiddleware, async (req, res) => {
       slotStart: { $gte: new Date() }
     }).select('slotStart slotEnd');
     const booked = existing.map(b => b.slotStart.getTime());
-    const available = allSlots.filter(s => !booked.includes(s.start.getTime()) && s.start > new Date());
+    const available = allSlots.filter(s => {
+    const slotStart = new Date(s.start);
+    const isBooked = booked.includes(slotStart.getTime());
+    return !isBooked && slotStart > new Date();
+  });
     res.json(available);
   } catch (err) {
     console.error(err);
