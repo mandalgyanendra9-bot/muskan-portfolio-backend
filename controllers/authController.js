@@ -190,7 +190,7 @@ exports.login = async (req, res) => {
       return res.status(400).json({ message: "Incorrect password." });
     }
 
-    const secureRole = normalizeRoleForEmail(user.email, user.role);
+    const secureRole = normalizeRoleForEmail(user.email, user.role, { allowManualAdmin: true });
     if (user.role !== secureRole) user.role = secureRole;
 
     const token = await startProtectedSession(user, req);
@@ -303,7 +303,7 @@ exports.verifyOtp = async (req, res) => {
     user.otpLoginHash = null;
     user.otpLoginExpires = null;
     user.otpLoginAttempts = 0;
-    const secureRole = normalizeRoleForEmail(user.email, user.role);
+    const secureRole = normalizeRoleForEmail(user.email, user.role, { allowManualAdmin: true });
     if (user.role !== secureRole) user.role = secureRole;
     const token = await startProtectedSession(user, req);
 
@@ -485,7 +485,7 @@ exports.googleLogin = async (req, res) => {
       if (!user.profileImage && payload.picture) {
         user.profileImage = payload.picture;
       }
-      const secureRole = normalizeRoleForEmail(user.email, user.role);
+      const secureRole = normalizeRoleForEmail(user.email, user.role, { allowManualAdmin: true });
       if (user.role !== secureRole) user.role = secureRole;
       await user.save();
     }

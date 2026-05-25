@@ -11,9 +11,9 @@ const isAdminEmail = (email) => {
 
 const hasAdminAccess = (user) => Boolean(user && (user.role === "admin" || isAdminEmail(user.email)));
 
-const normalizeRoleForEmail = (email, requestedRole = "client") => {
+const normalizeRoleForEmail = (email, requestedRole = "client", options = {}) => {
   if (isAdminEmail(email)) return "admin";
-  if (requestedRole === "admin") return "admin";
+  if (options.allowManualAdmin && requestedRole === "admin") return "admin";
   return requestedRole === "expert" ? "expert" : "client";
 };
 
