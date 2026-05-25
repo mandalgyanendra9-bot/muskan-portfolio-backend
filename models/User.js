@@ -103,6 +103,8 @@ const userSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now },
   // ─── Payout / Financial Details ─────────────────────
   upiId: { type: String, default: "" },
+  accountHolderName: { type: String, default: "" },
+  payoutMethod: { type: String, enum: ["upi", "bank"], default: "upi" },
   bankDetails: {
     accountNumber: { type: String, default: "" },
     ifsc: { type: String, default: "" },

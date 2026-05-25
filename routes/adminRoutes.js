@@ -3,12 +3,14 @@ const router = express.Router();
 const User = require("../models/User");
 const Booking = require("../models/Booking");
 const Message = require("../models/Message");
+const Payout = require("../models/Payout");
 const authMiddleware = require("../middleware/authMiddleware");
 const adminMiddleware = require("../middleware/adminMiddleware");
 const { isAdminEmail } = require("../utils/adminAccess");
 
 const BOOKING_STATUSES = ["pending", "confirmed", "completed", "cancelled"];
 const PAYMENT_STATUSES = ["unpaid", "paid", "refunded"];
+const PAYOUT_STATUSES = ["pending", "approved", "rejected", "paid"];
 
 const adminOnly = [authMiddleware, adminMiddleware];
 
@@ -108,6 +110,55 @@ router.get("/payments", adminOnly, async (req, res) => {
       .populate("client expert", "name email")
       .sort({ createdAt: -1 });
     res.json(payments);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// GET ALL PAYOUT REQUESTS
+router.get("/payouts", adminOnly, async (req, res) => {
+  try {
+    const payouts = await Payout.find()
+      .populate("expert", "name email profileImage upiId accountHolderName payoutMethod bankDetails")
+      .populate("processedBy", "name email")
+      .sort({ createdAt: -1 });
+    res.json(payouts);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// UPDATE PAYOUT REQUEST STATUS
+router.put("/payouts/:id/status", adminOnly, async (req, res) => {
+  try {
+    const { status, transactionId, adminNote } = req.body;
+
+    if (!PAYOUT_STATUSES.includes(status)) {
+      return res.status(400).json({ message: "Invalid payout status" });
+    }
+
+    const payout = await Payout.findById(req.params.id);
+    if (!payout) return res.status(404).json({ message: "Payout not found" });
+
+    payout.status = status;
+    payout.adminNote = adminNote || payout.adminNote || "";
+    payout.processedBy = req.user.id;
+    payout.processedAt = new Date();
+
+    if (status === "paid") {
+      payout.transactionId = transactionId || payout.transactionId || "";
+      payout.paidAt = new Date();
+    } else if (status !== "paid") {
+      payout.paidAt = null;
+    }
+
+    await payout.save();
+
+    const updatedPayout = await Payout.findById(payout._id)
+      .populate("expert", "name email profileImage upiId accountHolderName payoutMethod bankDetails")
+      .populate("processedBy", "name email");
+
+    res.json({ message: `Payout marked ${status}`, payout: updatedPayout });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
