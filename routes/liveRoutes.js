@@ -3,7 +3,7 @@ const router = express.Router();
 const LiveStream = require("../models/LiveStream");
 const User = require("../models/User");
 const authMiddleware = require("../middleware/authMiddleware");
-const { isAdminEmail } = require("../utils/adminAccess");
+const { hasAdminAccess } = require("../utils/adminAccess");
 
 const safeUserSelect = "name email profileImage title role coinBalance walletBalance subscriptionPlan";
 
@@ -102,7 +102,7 @@ router.put("/:id/end", authMiddleware, async (req, res) => {
 
     const user = await User.findById(req.user.id).select("email role");
     const isHost = stream.host.toString() === req.user.id;
-    const isAdmin = user?.role === "admin" && isAdminEmail(user.email);
+    const isAdmin = hasAdminAccess(user);
     if (!isHost && !isAdmin) {
       return res.status(403).json({ message: "Only the host can end this live stream" });
     }

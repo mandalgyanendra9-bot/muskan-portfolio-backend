@@ -7,6 +7,15 @@ const bookingSchema = new mongoose.Schema({
   slotEnd: { type: Date, required: true },
   duration: { type: Number, default: 1 }, // in hours
   totalPrice: { type: Number, required: true },
+  grossAmount: { type: Number, default: 0 },
+  platformCommission: { type: Number, default: 0 },
+  expertEarning: { type: Number, default: 0 },
+  commissionPercent: { type: Number, default: 20 },
+  payoutStatus: {
+    type: String,
+    enum: ["not_requested", "pending", "requested", "approved", "paid", "rejected"],
+    default: "not_requested",
+  },
   isPriority: { type: Boolean, default: false },
   status: { 
     type: String, 

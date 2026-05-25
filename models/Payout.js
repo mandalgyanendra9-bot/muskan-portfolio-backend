@@ -10,6 +10,7 @@ const payoutDetailsSnapshotSchema = new mongoose.Schema({
 
 const payoutSchema = new mongoose.Schema({
   expert: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+  bookings: [{ type: mongoose.Schema.Types.ObjectId, ref: "Booking" }],
   amount: { type: Number, required: true },
   commission: { type: Number, default: 0 },
   netAmount: { type: Number, required: true },

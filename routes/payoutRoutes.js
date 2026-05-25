@@ -1,5 +1,6 @@
 const express = require("express");
 const router = express.Router();
+const Booking = require("../models/Booking");
 const Payout = require("../models/Payout");
 const User = require("../models/User");
 const authMiddleware = require("../middleware/authMiddleware");
@@ -125,23 +126,17 @@ router.post("/request", authMiddleware, async (req, res) => {
     }
 
     const wallet = await getPayoutWallet(expert._id);
-    const requestedAmount = roundMoney(req.body.amount || wallet.availableBalance);
+    const requestedAmount = roundMoney(wallet.availableBalance);
 
     if (requestedAmount <= 0) {
       return res.status(400).json({ message: "No available balance to request" });
     }
-    if (requestedAmount > wallet.availableBalance) {
-      return res.status(400).json({ message: "Requested amount exceeds available balance" });
-    }
-
-    const requestedCommission = roundMoney(
-      (requestedAmount * wallet.platformCommissionPercent) / Math.max(100 - wallet.platformCommissionPercent, 1)
-    );
 
     const payout = await Payout.create({
       expert: expert._id,
+      bookings: wallet.availableBookingIds,
       amount: requestedAmount,
-      commission: requestedCommission,
+      commission: wallet.availablePlatformCommission,
       netAmount: requestedAmount,
       grossEarningsAtRequest: wallet.grossEarnings,
       totalEarningsAtRequest: wallet.totalEarnings,
@@ -152,6 +147,11 @@ router.post("/request", authMiddleware, async (req, res) => {
       payoutDetails: getPayoutDetailsSnapshot(settings),
       status: "pending",
     });
+
+    await Booking.updateMany(
+      { _id: { $in: wallet.availableBookingIds }, expert: expert._id, payoutStatus: { $in: ["not_requested", "pending"] } },
+      { $set: { payoutStatus: "requested" } }
+    );
 
     res.status(201).json({
       message: "Payout request submitted for admin review",
@@ -188,6 +188,10 @@ router.put("/:id/approve", adminOnly, async (req, res) => {
     payout.processedAt = new Date();
     payout.paidAt = new Date();
     await payout.save();
+    await Booking.updateMany(
+      { _id: { $in: payout.bookings || [] }, expert: payout.expert },
+      { $set: { payoutStatus: "paid" } }
+    );
 
     res.json({ message: "Payout marked as paid", payout });
   } catch (error) {

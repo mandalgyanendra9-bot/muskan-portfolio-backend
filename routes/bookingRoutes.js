@@ -7,7 +7,8 @@ const moment = require('moment');
 const Razorpay = require('razorpay');
 const crypto = require("crypto");
 const ChatRoom = require('../models/ChatRoom');
-const { isAdminEmail } = require("../utils/adminAccess");
+const { hasAdminAccess } = require("../utils/adminAccess");
+const { applyBookingEarnings } = require("../utils/earnings");
 
 let razorpay;
 if (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
@@ -88,15 +89,15 @@ router.post("/verify-payment", authMiddleware, async (req, res) => {
 
     // Handle Demo Mode Payment
     if (isDemoMode) {
-      const booking = await Booking.findByIdAndUpdate(
-        bookingId,
-        { 
-          status: "confirmed", 
-          paymentStatus: "paid", 
-          paymentId: `demo_payment_${Date.now()}` 
-        },
-        { new: true }
-      ).populate("client expert", "name email profileImage title");
+      const bookingDoc = await Booking.findById(bookingId);
+      if (!bookingDoc) return res.status(404).json({ message: "Booking not found" });
+      bookingDoc.status = "confirmed";
+      bookingDoc.paymentStatus = "paid";
+      bookingDoc.paymentId = `demo_payment_${Date.now()}`;
+      await applyBookingEarnings(bookingDoc);
+      await bookingDoc.save();
+      const booking = await Booking.findById(bookingDoc._id)
+        .populate("client expert", "name email profileImage title");
       
       // Create ChatRoom for this booking if not exists
       await ChatRoom.findOneAndUpdate(
@@ -116,15 +117,15 @@ router.post("/verify-payment", authMiddleware, async (req, res) => {
       .digest("hex");
 
     if (expectedSignature === razorpay_signature) {
-      const booking = await Booking.findByIdAndUpdate(
-        bookingId,
-        { 
-          status: "confirmed", 
-          paymentStatus: "paid", 
-          paymentId: razorpay_payment_id 
-        },
-        { new: true }
-      ).populate("client expert", "name email profileImage title");
+      const bookingDoc = await Booking.findById(bookingId);
+      if (!bookingDoc) return res.status(404).json({ message: "Booking not found" });
+      bookingDoc.status = "confirmed";
+      bookingDoc.paymentStatus = "paid";
+      bookingDoc.paymentId = razorpay_payment_id;
+      await applyBookingEarnings(bookingDoc);
+      await bookingDoc.save();
+      const booking = await Booking.findById(bookingDoc._id)
+        .populate("client expert", "name email profileImage title");
       
       // Create ChatRoom for this booking if not exists
       await ChatRoom.findOneAndUpdate(
@@ -173,7 +174,7 @@ router.put("/:id/status", authMiddleware, async (req, res) => {
     
     // Admin check
     const user = await User.findById(req.user.id).select("email role");
-    const isAdmin = user?.role === "admin" && isAdminEmail(user.email);
+    const isAdmin = hasAdminAccess(user);
 
 
     if (!isClient && !isExpert && !isAdmin) {
@@ -189,6 +190,7 @@ router.put("/:id/status", authMiddleware, async (req, res) => {
       // If completed, ensure marked as paid just in case
       if (booking.paymentStatus === "unpaid") {
         booking.paymentStatus = "paid";
+        await applyBookingEarnings(booking);
       }
     }
 

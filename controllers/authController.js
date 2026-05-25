@@ -87,12 +87,13 @@ exports.register = async (req, res) => {
 
     const hashedPassword = await bcrypt.hash(password, 10);
     const emailVerifyToken = crypto.randomBytes(32).toString("hex");
+    const requestedRole = req.body.role === "expert" ? "expert" : "client";
 
     await User.create({
       name,
       email: emailAddress,
       password: hashedPassword,
-      role: normalizeRoleForEmail(emailAddress),
+      role: normalizeRoleForEmail(emailAddress, requestedRole),
       emailVerifyToken,
       isEmailVerified: false,
     });

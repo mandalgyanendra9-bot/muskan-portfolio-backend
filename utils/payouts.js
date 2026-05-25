@@ -1,11 +1,9 @@
 const mongoose = require("mongoose");
 const Booking = require("../models/Booking");
 const Payout = require("../models/Payout");
+const { getBookingEarnings, getCommissionPercent, roundMoney } = require("./earnings");
 
-const PLATFORM_COMMISSION_PERCENT = Number(process.env.PLATFORM_COMMISSION_PERCENT || 20);
 const ACTIVE_PAYOUT_STATUSES = ["pending", "approved"];
-
-const roundMoney = (value) => Math.round((Number(value) || 0) * 100) / 100;
 
 const toObjectId = (id) => {
   if (id instanceof mongoose.Types.ObjectId) return id;
@@ -38,58 +36,74 @@ const isPayoutSettingsComplete = (settings) => {
 
 const getPayoutWallet = async (expertId) => {
   const expertObjectId = toObjectId(expertId);
+  const commissionPercent = await getCommissionPercent();
 
-  const [bookingRows, payoutRows] = await Promise.all([
-    Booking.aggregate([
-      {
-        $match: {
-          expert: expertObjectId,
-          status: "completed",
-          paymentStatus: "paid",
-        },
-      },
-      { $group: { _id: null, grossEarnings: { $sum: "$totalPrice" } } },
-    ]),
+  const [paidBookings, payoutRows] = await Promise.all([
+    Booking.find({
+      expert: expertObjectId,
+      paymentStatus: "paid",
+      payoutStatus: { $in: ["not_requested", "pending", "requested", "approved", "paid"] },
+    }).select("totalPrice grossAmount platformCommission expertEarning commissionPercent payoutStatus"),
     Payout.aggregate([
       { $match: { expert: expertObjectId } },
       { $group: { _id: "$status", total: { $sum: "$amount" }, count: { $sum: 1 } } },
     ]),
   ]);
 
-  const grossEarnings = roundMoney(bookingRows[0]?.grossEarnings || 0);
-  const platformCommission = roundMoney((grossEarnings * PLATFORM_COMMISSION_PERCENT) / 100);
-  const totalEarnings = roundMoney(grossEarnings - platformCommission);
+  const totals = paidBookings.reduce((acc, booking) => {
+    const earnings = getBookingEarnings(booking, commissionPercent);
+    acc.grossEarnings += earnings.grossAmount;
+    acc.platformCommission += earnings.platformCommission;
+    acc.totalEarnings += earnings.expertEarning;
 
-  const payoutTotals = payoutRows.reduce((totals, row) => {
-    totals[row._id] = {
+    if (booking.payoutStatus === "pending" || booking.payoutStatus === "not_requested") {
+      acc.availableBalance += earnings.expertEarning;
+      acc.availablePlatformCommission += earnings.platformCommission;
+      acc.availableBookingIds.push(booking._id);
+    } else if (booking.payoutStatus === "requested" || booking.payoutStatus === "approved") {
+      acc.pendingEarnings += earnings.expertEarning;
+    } else if (booking.payoutStatus === "paid") {
+      acc.paidOutFromBookings += earnings.expertEarning;
+    }
+
+    return acc;
+  }, {
+    availableBalance: 0,
+    availableBookingIds: [],
+    availablePlatformCommission: 0,
+    grossEarnings: 0,
+    paidOutFromBookings: 0,
+    pendingEarnings: 0,
+    platformCommission: 0,
+    totalEarnings: 0,
+  });
+
+  const payoutCounts = payoutRows.reduce((rows, row) => {
+    rows[row._id] = {
       amount: roundMoney(row.total),
       count: row.count,
     };
-    return totals;
+    return rows;
   }, {});
 
-  const pendingEarnings = ACTIVE_PAYOUT_STATUSES.reduce(
-    (sum, status) => sum + (payoutTotals[status]?.amount || 0),
-    0
-  );
-  const paidOut = payoutTotals.paid?.amount || 0;
-  const availableBalance = roundMoney(Math.max(0, totalEarnings - pendingEarnings - paidOut));
+  const paidOut = payoutCounts.paid?.amount || totals.paidOutFromBookings || 0;
 
   return {
-    grossEarnings,
-    totalEarnings,
-    pendingEarnings: roundMoney(pendingEarnings),
-    availableBalance,
+    grossEarnings: roundMoney(totals.grossEarnings),
+    totalEarnings: roundMoney(totals.totalEarnings),
+    pendingEarnings: roundMoney(totals.pendingEarnings),
+    availableBalance: roundMoney(totals.availableBalance),
     paidOut: roundMoney(paidOut),
-    platformCommission,
-    platformCommissionPercent: PLATFORM_COMMISSION_PERCENT,
-    payoutCounts: payoutTotals,
+    platformCommission: roundMoney(totals.platformCommission),
+    platformCommissionPercent: commissionPercent,
+    availableBookingIds: totals.availableBookingIds,
+    availablePlatformCommission: roundMoney(totals.availablePlatformCommission),
+    payoutCounts,
   };
 };
 
 module.exports = {
   ACTIVE_PAYOUT_STATUSES,
-  PLATFORM_COMMISSION_PERCENT,
   getPayoutDetailsSnapshot,
   getPayoutSettings,
   getPayoutWallet,

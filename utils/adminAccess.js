@@ -9,13 +9,17 @@ const isAdminEmail = (email) => {
   return Boolean(adminEmail) && normalizeEmail(email) === adminEmail;
 };
 
+const hasAdminAccess = (user) => Boolean(user && (user.role === "admin" || isAdminEmail(user.email)));
+
 const normalizeRoleForEmail = (email, requestedRole = "client") => {
   if (isAdminEmail(email)) return "admin";
+  if (requestedRole === "admin") return "admin";
   return requestedRole === "expert" ? "expert" : "client";
 };
 
 module.exports = {
   getAdminEmail,
+  hasAdminAccess,
   isAdminEmail,
   normalizeEmail,
   normalizeRoleForEmail,

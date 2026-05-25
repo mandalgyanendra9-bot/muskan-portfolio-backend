@@ -1,5 +1,5 @@
 const User = require("../models/User");
-const { isAdminEmail } = require("../utils/adminAccess");
+const { hasAdminAccess, isAdminEmail } = require("../utils/adminAccess");
 
 const adminMiddleware = async (req, res, next) => {
   try {
@@ -9,15 +9,11 @@ const adminMiddleware = async (req, res, next) => {
       return res.status(403).json({ message: "Unauthorized: admin access required." });
     }
 
-    if (!isAdminEmail(user.email)) {
-      if (user.role === "admin") {
-        user.role = "client";
-        await user.save();
-      }
+    if (!hasAdminAccess(user)) {
       return res.status(403).json({ message: "Unauthorized: admin access required." });
     }
 
-    if (user.role !== "admin") {
+    if (isAdminEmail(user.email) && user.role !== "admin") {
       user.role = "admin";
       await user.save();
     }

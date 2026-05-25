@@ -6,6 +6,7 @@ const Transaction = require("../models/Transaction");
 const User = require("../models/User");
 const Booking = require("../models/Booking");
 const authMiddleware = require("../middleware/authMiddleware");
+const { applyBookingEarnings } = require("../utils/earnings");
 
 // Initialize Razorpay
 const razorpay = new Razorpay({
@@ -101,6 +102,7 @@ router.post("/verify", authMiddleware, async (req, res) => {
       if (booking) {
         booking.paymentStatus = "paid";
         booking.paymentId = razorpay_payment_id;
+        await applyBookingEarnings(booking, transaction.amount);
         await booking.save();
 
         const expert = await User.findById(booking.expert);
@@ -190,6 +192,7 @@ router.post("/pay-wallet", authMiddleware, async (req, res) => {
     const booking = await Booking.findById(bookingId);
     if (booking) {
       booking.paymentStatus = "paid";
+      await applyBookingEarnings(booking, amount);
       await booking.save();
       
       const expert = await User.findById(booking.expert);

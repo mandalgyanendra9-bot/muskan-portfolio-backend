@@ -7,6 +7,12 @@ const Payout = require("../models/Payout");
 const authMiddleware = require("../middleware/authMiddleware");
 const adminMiddleware = require("../middleware/adminMiddleware");
 const { isAdminEmail } = require("../utils/adminAccess");
+const {
+  applyBookingEarnings,
+  getBookingEarnings,
+  getPlatformSettings,
+  roundMoney,
+} = require("../utils/earnings");
 
 const BOOKING_STATUSES = ["pending", "confirmed", "completed", "cancelled"];
 const PAYMENT_STATUSES = ["unpaid", "paid", "refunded"];
@@ -15,6 +21,8 @@ const PAYOUT_STATUSES = ["pending", "approved", "rejected", "paid"];
 const adminOnly = [authMiddleware, adminMiddleware];
 
 const bookingPopulateFields = "name email profileImage title role";
+
+const isProtectedAdmin = (user) => user?.role === "admin" || isAdminEmail(user?.email);
 
 // GET ALL USERS
 router.get("/users", adminOnly, async (req, res) => {
@@ -31,7 +39,7 @@ router.put("/user/:id/block", adminOnly, async (req, res) => {
   try {
     const user = await User.findById(req.params.id);
     if (!user) return res.status(404).json({ message: "User not found" });
-    if (isAdminEmail(user.email)) {
+    if (isProtectedAdmin(user)) {
       return res.status(400).json({ message: "Admin accounts cannot be blocked" });
     }
 
@@ -92,7 +100,7 @@ router.delete("/user/:id", adminOnly, async (req, res) => {
   try {
     const user = await User.findById(req.params.id);
     if (!user) return res.status(404).json({ message: "User not found" });
-    if (isAdminEmail(user.email)) {
+    if (isProtectedAdmin(user)) {
       return res.status(400).json({ message: "Admin accounts cannot be deleted" });
     }
 
@@ -110,6 +118,34 @@ router.get("/payments", adminOnly, async (req, res) => {
       .populate("client expert", "name email")
       .sort({ createdAt: -1 });
     res.json(payments);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// GET ADMIN PLATFORM SETTINGS
+router.get("/settings", adminOnly, async (req, res) => {
+  try {
+    const settings = await getPlatformSettings();
+    res.json(settings);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// UPDATE ADMIN PLATFORM SETTINGS
+router.put("/settings", adminOnly, async (req, res) => {
+  try {
+    const commissionPercent = Number(req.body.commissionPercent);
+    if (Number.isNaN(commissionPercent) || commissionPercent < 0 || commissionPercent > 100) {
+      return res.status(400).json({ message: "Commission percentage must be between 0 and 100" });
+    }
+
+    const settings = await getPlatformSettings();
+    settings.commissionPercent = commissionPercent;
+    await settings.save();
+
+    res.json({ message: "Admin settings updated", settings });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -154,6 +190,19 @@ router.put("/payouts/:id/status", adminOnly, async (req, res) => {
 
     await payout.save();
 
+    const bookingStatus = status === "paid"
+      ? "paid"
+      : status === "rejected"
+        ? "pending"
+        : status === "approved"
+          ? "approved"
+          : "requested";
+
+    await Booking.updateMany(
+      { _id: { $in: payout.bookings || [] }, expert: payout.expert },
+      { $set: { payoutStatus: bookingStatus } }
+    );
+
     const updatedPayout = await Payout.findById(payout._id)
       .populate("expert", "name email profileImage upiId accountHolderName payoutMethod bankDetails")
       .populate("processedBy", "name email");
@@ -195,6 +244,9 @@ router.put("/booking/:id/status", adminOnly, async (req, res) => {
         return res.status(400).json({ message: "Invalid payment status" });
       }
       booking.paymentStatus = paymentStatus;
+      if (paymentStatus === "paid") {
+        await applyBookingEarnings(booking);
+      }
     }
 
     await booking.save();
@@ -244,6 +296,7 @@ router.delete("/report/:id", adminOnly, async (req, res) => {
 // GET DETAILED ANALYTICS
 router.get("/analytics", adminOnly, async (req, res) => {
   try {
+    const settings = await getPlatformSettings();
     const [
       totalUsers,
       totalExperts,
@@ -254,7 +307,8 @@ router.get("/analytics", adminOnly, async (req, res) => {
       blockedUsers,
       verifiedUsers,
       unreadReports,
-      revenueResult,
+      paidBookingsForRevenue,
+      paidOutRows,
       bookingStatusRows,
       paymentStatusRows,
       latestBookings,
@@ -268,9 +322,10 @@ router.get("/analytics", adminOnly, async (req, res) => {
       User.countDocuments({ isBlocked: true }),
       User.countDocuments({ isEmailVerified: true }),
       Message.countDocuments({ isRead: false }),
-      Booking.aggregate([
-        { $match: { paymentStatus: "paid" } },
-        { $group: { _id: null, total: { $sum: "$totalPrice" } } },
+      Booking.find({ paymentStatus: "paid" }).select("totalPrice grossAmount platformCommission expertEarning commissionPercent payoutStatus"),
+      Payout.aggregate([
+        { $match: { status: "paid" } },
+        { $group: { _id: null, total: { $sum: "$amount" } } },
       ]),
       Booking.aggregate([
         { $group: { _id: "$status", count: { $sum: 1 } } },
@@ -289,6 +344,24 @@ router.get("/analytics", adminOnly, async (req, res) => {
       return acc;
     }, {});
 
+    const revenueMetrics = paidBookingsForRevenue.reduce((acc, booking) => {
+      const earnings = getBookingEarnings(booking, settings.commissionPercent);
+      acc.totalRevenue += earnings.grossAmount;
+      acc.platformCommissionEarned += earnings.platformCommission;
+      acc.totalExpertEarnings += earnings.expertEarning;
+      if (booking.payoutStatus !== "paid") {
+        acc.expertEarningsPending += earnings.expertEarning;
+      }
+      return acc;
+    }, {
+      expertEarningsPending: 0,
+      platformCommissionEarned: 0,
+      totalExpertEarnings: 0,
+      totalRevenue: 0,
+    });
+
+    const paidOut = roundMoney(paidOutRows[0]?.total || 0);
+
     res.json({
       metrics: {
         totalUsers,
@@ -296,7 +369,12 @@ router.get("/analytics", adminOnly, async (req, res) => {
         totalClients,
         totalBookings,
         totalPaidBookings,
-        totalRevenue: revenueResult[0]?.total || 0,
+        totalRevenue: roundMoney(revenueMetrics.totalRevenue),
+        platformCommissionEarned: roundMoney(revenueMetrics.platformCommissionEarned),
+        totalExpertEarnings: roundMoney(revenueMetrics.totalExpertEarnings),
+        expertEarningsPending: roundMoney(revenueMetrics.expertEarningsPending),
+        paidOut,
+        commissionPercent: settings.commissionPercent,
         approvedExperts,
         pendingApprovals: totalExperts - approvedExperts,
         blockedUsers,
