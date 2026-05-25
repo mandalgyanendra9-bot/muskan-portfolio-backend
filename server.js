@@ -3,6 +3,7 @@ const cors = require("cors");
 const dotenv = require("dotenv");
 const path = require("path");
 const http = require("http");
+const jwt = require("jsonwebtoken");
 const { Server } = require("socket.io");
 const connectDB = require("./config/db");
 const rateLimit = require("./middleware/rateLimiter");
@@ -126,10 +127,24 @@ const removeSocketFromLiveRooms = async (socket) => {
 // Socket.io connection handling
 io.on('connection', (socket) => {
   console.log('🔌 New socket connection:', socket.id);
+  const token = socket.handshake.auth?.token;
+  if (token) {
+    try {
+      const cleanToken = token.startsWith("Bearer ") ? token.slice(7) : token;
+      const decoded = jwt.verify(cleanToken, process.env.JWT_SECRET || "secretkey");
+      socket.userId = decoded.id;
+    } catch (error) {
+      console.error("Socket auth error:", error.message);
+    }
+  }
 
 // Join a chat room based on booking ID and user ID (after auth)
   socket.on('joinRoom', async ({ bookingId, userId }) => {
     try {
+      if (socket.userId && userId && socket.userId !== userId) {
+        socket.emit('error', 'Unauthorized to join this chat');
+        return;
+      }
       const room = await ChatRoom.findOne({ booking: bookingId });
       if (!room) {
         socket.emit('error', 'Chat room not found');
@@ -143,15 +158,17 @@ io.on('connection', (socket) => {
       const roomName = `chat_${bookingId}`;
       socket.join(roomName);
       socket.bookingId = bookingId;
-      socket.userId = userId;
+      socket.userId = socket.userId || userId;
       console.log(`User ${userId} joined chat room ${roomName}`);
     } catch (err) {
       console.error('joinRoom error:', err);
     }
   });
   socket.on('join', (userId) => {
-    socket.join(userId);
-    console.log(`User ${userId} joined room`);
+    const roomId = socket.userId || userId;
+    if (!roomId || (socket.userId && userId && socket.userId !== userId)) return;
+    socket.join(roomId);
+    console.log(`User ${roomId} joined room`);
   });
 
 // Receive a chat message for a booking and broadcast to the room
@@ -179,10 +196,19 @@ io.on('connection', (socket) => {
   socket.on('chatMessage', async (msg) => {
     // msg: { sender, recipient, message, messageType }
     try {
+      if (!socket.userId || socket.userId !== msg.sender) return;
       const ChatMessage = require('./models/ChatMessage');
-      const saved = await ChatMessage.create(msg);
+      const savedDoc = await ChatMessage.create({
+        sender: socket.userId,
+        recipient: msg.recipient,
+        message: String(msg.message || "").trim(),
+        messageType: msg.messageType === "image" ? "image" : "text",
+      });
+      const saved = await ChatMessage.findById(savedDoc._id)
+        .populate("sender", "name email profileImage title role")
+        .populate("recipient", "name email profileImage title role");
       // Emit to both participants' rooms
-      io.to(msg.sender).to(msg.recipient).emit('newMessage', saved);
+      io.to(socket.userId).to(msg.recipient).emit('newMessage', saved);
     } catch (err) {
       console.error('Chat message error:', err);
     }
@@ -190,6 +216,7 @@ io.on('connection', (socket) => {
 
   // Typing indicator
   socket.on('typing', ({ sender, recipient }) => {
+    if (socket.userId && sender && socket.userId !== sender) return;
     io.to(recipient).emit('typing', { sender });
   });
 
@@ -197,8 +224,14 @@ io.on('connection', (socket) => {
   socket.on('seen', async ({ messageIds }) => {
     try {
       const ChatMessage = require('./models/ChatMessage');
-      await ChatMessage.updateMany({ _id: { $in: messageIds } }, { $set: { isSeen: true, seenAt: new Date() } });
-      io.to(sender).emit('messagesSeen', { messageIds });
+      const messages = await ChatMessage.find({
+        _id: { $in: messageIds || [] },
+        ...(socket.userId ? { recipient: socket.userId } : {}),
+      }).select("sender");
+      const idsToUpdate = messages.map((message) => message._id);
+      await ChatMessage.updateMany({ _id: { $in: idsToUpdate } }, { $set: { isSeen: true, seenAt: new Date() } });
+      const senderIds = [...new Set(messages.map((message) => message.sender.toString()))];
+      senderIds.forEach((senderId) => io.to(senderId).emit('messagesSeen', { messageIds: idsToUpdate.map((id) => id.toString()) }));
     } catch (err) {
       console.error('Seen update error:', err);
     }
