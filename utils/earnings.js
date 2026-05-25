@@ -1,4 +1,5 @@
 const PlatformSettings = require("../models/PlatformSettings");
+const User = require("../models/User");
 
 const DEFAULT_COMMISSION_PERCENT = 20;
 
@@ -64,10 +65,30 @@ const applyBookingEarnings = async (booking, amount = booking.totalPrice) => {
   return earnings;
 };
 
+const creditExpertWalletForBooking = async (booking) => {
+  if (booking.expertWalletCredited) {
+    return getBookingEarnings(booking);
+  }
+
+  const earnings = getBookingEarnings(booking);
+  await User.findByIdAndUpdate(booking.expert, {
+    $inc: {
+      walletBalance: earnings.expertEarning,
+      completedPaidBookings: 1,
+    },
+  });
+
+  booking.expertWalletCredited = true;
+  booking.expertWalletCreditedAt = new Date();
+
+  return earnings;
+};
+
 module.exports = {
   DEFAULT_COMMISSION_PERCENT,
   applyBookingEarnings,
   calculateBookingEarnings,
+  creditExpertWalletForBooking,
   getBookingEarnings,
   getCommissionPercent,
   getPlatformSettings,

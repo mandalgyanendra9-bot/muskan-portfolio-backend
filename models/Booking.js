@@ -11,6 +11,8 @@ const bookingSchema = new mongoose.Schema({
   platformCommission: { type: Number, default: 0 },
   expertEarning: { type: Number, default: 0 },
   commissionPercent: { type: Number, default: 20 },
+  expertWalletCredited: { type: Boolean, default: false },
+  expertWalletCreditedAt: { type: Date, default: null },
   payoutStatus: {
     type: String,
     enum: ["not_requested", "pending", "requested", "approved", "paid", "rejected"],

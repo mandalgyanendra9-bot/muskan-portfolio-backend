@@ -8,7 +8,7 @@ const Razorpay = require('razorpay');
 const crypto = require("crypto");
 const ChatRoom = require('../models/ChatRoom');
 const { hasAdminAccess } = require("../utils/adminAccess");
-const { applyBookingEarnings } = require("../utils/earnings");
+const { applyBookingEarnings, creditExpertWalletForBooking } = require("../utils/earnings");
 
 let razorpay;
 if (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
@@ -17,13 +17,21 @@ if (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
     key_secret: process.env.RAZORPAY_KEY_SECRET,
   });
 } else {
-  console.warn("Razorpay keys missing. Using Demo Payment Fallback Mode.");
+  console.warn("Razorpay keys missing. Booking checkout is disabled until platform Razorpay keys are configured.");
 }
 
 // 1. CREATE BOOKING & ORDER
 router.post("/create-order", authMiddleware, async (req, res) => {
   try {
     const { expert: expertId, date, duration, totalPrice, notes } = req.body;
+    const numericTotalPrice = Number(totalPrice);
+
+    if (!numericTotalPrice || numericTotalPrice <= 0) {
+      return res.status(400).json({ message: "Valid booking price is required" });
+    }
+    if (!razorpay) {
+      return res.status(503).json({ message: "Platform Razorpay checkout is not configured yet" });
+    }
 
     // Verify expert availability and role
     const expert = await User.findById(expertId);
@@ -37,26 +45,14 @@ router.post("/create-order", authMiddleware, async (req, res) => {
       slotStart: date,
       slotEnd: moment(date).add(duration, 'minutes').toDate(),
       duration,
-      totalPrice,
+      totalPrice: numericTotalPrice,
       notes,
       isPriority: client?.subscriptionPlan === "premium",
       meetingLink: `/video-call/room_${Math.random().toString(36).substring(2, 9)}` // Auto-generate room link
     });
 
-    // Check if Razorpay is configured
-    if (!razorpay) {
-      // In Demo Mode: Create a dummy order and flag it as a mock order so the UI can proceed immediately
-      return res.status(201).json({
-        booking,
-        orderId: `mock_order_${booking._id}`,
-        amount: totalPrice * 100,
-        currency: "INR",
-        isDemoMode: true
-      });
-    }
-
     const options = {
-      amount: totalPrice * 100, // in paise
+      amount: Math.round(numericTotalPrice * 100),
       currency: "INR",
       receipt: `receipt_${booking._id}`,
     };
@@ -68,7 +64,7 @@ router.post("/create-order", authMiddleware, async (req, res) => {
       orderId: order.id,
       amount: order.amount,
       currency: order.currency,
-      isDemoMode: false
+      keyId: process.env.RAZORPAY_KEY_ID,
     });
   } catch (error) {
     console.error(error);
@@ -76,40 +72,23 @@ router.post("/create-order", authMiddleware, async (req, res) => {
   }
 });
 
-// 2. VERIFY PAYMENT SIGNATURE / CONFIRM DEMO BOOKING
+// 2. VERIFY PAYMENT SIGNATURE
 router.post("/verify-payment", authMiddleware, async (req, res) => {
   try {
     const { 
       bookingId, 
       razorpay_order_id, 
       razorpay_payment_id, 
-      razorpay_signature,
-      isDemoMode 
+      razorpay_signature
     } = req.body;
 
-    // Handle Demo Mode Payment
-    if (isDemoMode) {
-      const bookingDoc = await Booking.findById(bookingId);
-      if (!bookingDoc) return res.status(404).json({ message: "Booking not found" });
-      bookingDoc.status = "confirmed";
-      bookingDoc.paymentStatus = "paid";
-      bookingDoc.paymentId = `demo_payment_${Date.now()}`;
-      await applyBookingEarnings(bookingDoc);
-      await bookingDoc.save();
-      const booking = await Booking.findById(bookingDoc._id)
-        .populate("client expert", "name email profileImage title");
-      
-      // Create ChatRoom for this booking if not exists
-      await ChatRoom.findOneAndUpdate(
-        { booking: booking._id },
-        { $setOnInsert: { booking: booking._id, participants: [booking.client, booking.expert] } },
-        { upsert: true, new: true }
-      );
-      
-      return res.json({ message: "Demo Payment Successful & Confirmed!", booking });
+    if (!razorpay) {
+      return res.status(503).json({ message: "Platform Razorpay checkout is not configured yet" });
+    }
+    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+      return res.status(400).json({ message: "Razorpay payment verification details are required" });
     }
 
-    // Verify Real Signature
     const body = razorpay_order_id + "|" + razorpay_payment_id;
     const expectedSignature = crypto
       .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
@@ -123,6 +102,7 @@ router.post("/verify-payment", authMiddleware, async (req, res) => {
       bookingDoc.paymentStatus = "paid";
       bookingDoc.paymentId = razorpay_payment_id;
       await applyBookingEarnings(bookingDoc);
+      await creditExpertWalletForBooking(bookingDoc);
       await bookingDoc.save();
       const booking = await Booking.findById(bookingDoc._id)
         .populate("client expert", "name email profileImage title");
@@ -186,14 +166,6 @@ router.put("/:id/status", authMiddleware, async (req, res) => {
     // Clients can cancel their bookings.
     booking.status = status;
     
-    if (status === "completed") {
-      // If completed, ensure marked as paid just in case
-      if (booking.paymentStatus === "unpaid") {
-        booking.paymentStatus = "paid";
-        await applyBookingEarnings(booking);
-      }
-    }
-
     await booking.save();
     
     const updatedBooking = await Booking.findById(booking._id)

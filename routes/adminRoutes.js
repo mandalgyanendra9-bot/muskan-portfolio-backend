@@ -9,6 +9,7 @@ const adminMiddleware = require("../middleware/adminMiddleware");
 const { isAdminEmail } = require("../utils/adminAccess");
 const {
   applyBookingEarnings,
+  creditExpertWalletForBooking,
   getBookingEarnings,
   getPlatformSettings,
   roundMoney,
@@ -246,6 +247,7 @@ router.put("/booking/:id/status", adminOnly, async (req, res) => {
       booking.paymentStatus = paymentStatus;
       if (paymentStatus === "paid") {
         await applyBookingEarnings(booking);
+        await creditExpertWalletForBooking(booking);
       }
     }
 
