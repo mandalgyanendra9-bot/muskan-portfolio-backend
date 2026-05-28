@@ -24,6 +24,7 @@ router.get('/:expertId', async (req, res) => {
     // Find bookings for this expert on the requested day
     const existing = await Booking.find({
       expert: expertId,
+      status: { $ne: "cancelled" },
       slotStart: { $gte: dayStart, $lt: dayEnd }
     }).select('slotStart slotEnd');
     const booked = existing.map(b => b.slotStart.getTime());

@@ -25,6 +25,8 @@ const bookingPopulateFields = "name email profileImage title role";
 
 const isProtectedAdmin = (user) => user?.role === "admin" || isAdminEmail(user?.email);
 
+const csvEscape = (value = "") => `"${String(value ?? "").replace(/"/g, '""')}"`;
+
 // GET ALL USERS
 router.get("/users", adminOnly, async (req, res) => {
   try {
@@ -160,6 +162,62 @@ router.get("/payouts", adminOnly, async (req, res) => {
       .populate("processedBy", "name email")
       .sort({ createdAt: -1 });
     res.json(payouts);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// DOWNLOAD PAYOUT REPORT AS CSV
+router.get("/payouts/report", adminOnly, async (req, res) => {
+  try {
+    const payouts = await Payout.find()
+      .populate("expert", "name email upiId accountHolderName payoutMethod bankDetails")
+      .populate("processedBy", "name email")
+      .sort({ createdAt: -1 });
+
+    const rows = [
+      [
+        "Requested At",
+        "Expert",
+        "Email",
+        "Amount",
+        "Commission",
+        "Status",
+        "Method",
+        "Account Holder",
+        "UPI",
+        "Bank Account",
+        "IFSC",
+        "Transaction ID",
+        "Processed By",
+        "Paid At",
+      ],
+      ...payouts.map((payout) => {
+        const details = payout.payoutDetails || {};
+        const method = details.payoutMethod || payout.payoutMethod || payout.expert?.payoutMethod || "upi";
+        return [
+          payout.createdAt?.toISOString?.() || "",
+          payout.expert?.name || "",
+          payout.expert?.email || "",
+          payout.amount || payout.netAmount || 0,
+          payout.commission || 0,
+          payout.status || "",
+          method,
+          details.accountHolderName || payout.expert?.accountHolderName || "",
+          details.upiId || payout.expert?.upiId || "",
+          details.bankAccountNumber || payout.expert?.bankDetails?.accountNumber || "",
+          details.ifscCode || payout.expert?.bankDetails?.ifsc || "",
+          payout.transactionId || "",
+          payout.processedBy?.name || "",
+          payout.paidAt?.toISOString?.() || "",
+        ];
+      }),
+    ];
+
+    const csv = rows.map((row) => row.map(csvEscape).join(",")).join("\n");
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="payout-report-${Date.now()}.csv"`);
+    res.send(csv);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

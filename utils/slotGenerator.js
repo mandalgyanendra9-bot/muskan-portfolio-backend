@@ -11,6 +11,7 @@ function generateSlotsForDate(expert, dateStr) {
   const dayName = moment.tz(dateStr, timezone).format('dddd');
   const dayEntry = availabilitySchedule.find(d => d.day === dayName);
   if (!dayEntry) return [];
+  if (!dayEntry.available) return [];
 
   // Build start and end moment objects in expert's timezone
   const dayStart = moment.tz(`${dateStr} ${dayEntry.from}`, 'YYYY-MM-DD HH:mm', timezone);

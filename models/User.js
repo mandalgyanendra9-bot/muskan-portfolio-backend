@@ -97,6 +97,10 @@ const userSchema = new mongoose.Schema({
   lastCoinClaimAt: { type: Date, default: null },
   subscriptionPlan: { type: String, enum: ["free", "pro", "premium"], default: "free" },
   subscriptionExpiresAt: { type: Date, default: null },
+  referralCode: { type: String, unique: true, sparse: true, uppercase: true, trim: true },
+  referredBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+  referralCount: { type: Number, default: 0 },
+  referralRewardCoins: { type: Number, default: 0 },
 
   completedPaidBookings: { type: Number, default: 0 },
   verifiedExpert: { type: Boolean, default: false },

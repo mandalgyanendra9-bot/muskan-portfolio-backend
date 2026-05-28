@@ -4,6 +4,7 @@ const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 const sendEmail = require("../config/email");
 const { normalizeEmail, normalizeRoleForEmail } = require("../utils/adminAccess");
+const { applyReferralReward, ensureReferralCode } = require("../utils/referrals");
 
 // ─── Helper: Generate JWT ────────────────────────────────────────────────────
 const hashValue = (value) => crypto.createHash("sha256").update(String(value)).digest("hex");
@@ -63,6 +64,10 @@ const safeUser = (user) => ({
   coinBalance: user.coinBalance,
   subscriptionPlan: user.subscriptionPlan,
   subscriptionExpiresAt: user.subscriptionExpiresAt,
+  referralCode: user.referralCode,
+  referredBy: user.referredBy,
+  referralCount: user.referralCount,
+  referralRewardCoins: user.referralRewardCoins,
   sessionProtectionEnabled: user.sessionProtectionEnabled,
   lastLoginAt: user.lastLoginAt,
 });
@@ -73,7 +78,7 @@ const safeUser = (user) => ({
 // ─────────────────────────────────────────────────────────────────────────────
 exports.register = async (req, res) => {
   try {
-    const { name, email, password } = req.body;
+    const { name, email, password, referralCode } = req.body;
 
     if (!name || !email || !password) {
       return res.status(400).json({ message: "Name, email and password are required." });
@@ -89,7 +94,7 @@ exports.register = async (req, res) => {
     const emailVerifyToken = crypto.randomBytes(32).toString("hex");
     const requestedRole = req.body.role === "expert" ? "expert" : "client";
 
-    await User.create({
+    const user = await User.create({
       name,
       email: emailAddress,
       password: hashedPassword,
@@ -97,6 +102,8 @@ exports.register = async (req, res) => {
       emailVerifyToken,
       isEmailVerified: false,
     });
+    await ensureReferralCode(user);
+    await applyReferralReward(user, referralCode);
 
     // Send verification email
     const verifyUrl = `${process.env.CLIENT_URL}/verify-email/${emailVerifyToken}`;
@@ -472,6 +479,8 @@ exports.googleLogin = async (req, res) => {
         role: normalizeRoleForEmail(emailAddress),
         password: null,
       });
+      await ensureReferralCode(user);
+      await applyReferralReward(user, req.body.referralCode);
     } else {
       if (user.isBlocked) {
         return res.status(403).json({ message: "Your account has been blocked by admin." });
@@ -487,6 +496,7 @@ exports.googleLogin = async (req, res) => {
       }
       const secureRole = normalizeRoleForEmail(user.email, user.role, { allowManualAdmin: true });
       if (user.role !== secureRole) user.role = secureRole;
+      await ensureReferralCode(user);
       await user.save();
     }
 

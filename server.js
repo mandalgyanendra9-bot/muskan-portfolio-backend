@@ -71,6 +71,7 @@ app.use("/api/payouts", require("./routes/payoutRoutes"));
 app.use("/api/chat", require("./routes/chatRoutes"));
 app.use("/api/live", require("./routes/liveRoutes"));
 app.use("/api/ai", require("./routes/aiRoutes"));
+app.use("/api/referrals", require("./routes/referralRoutes"));
 
 app.get("/", (req, res) => {
   res.send("Backend Running OK");
@@ -95,6 +96,7 @@ const io = new Server(server, {
 app.set("io", io);
 
 const LiveStream = require("./models/LiveStream");
+const Booking = require("./models/Booking");
 const liveViewers = new Map();
 
 const emitLiveViewerCount = async (roomId) => {
@@ -123,6 +125,50 @@ const removeSocketFromLiveRooms = async (socket) => {
   });
   await Promise.all(updates);
 };
+
+const autoCompleteExpiredBookings = async () => {
+  const now = new Date();
+
+  try {
+    const expiredBookings = await Booking.find({
+      status: "confirmed",
+      paymentStatus: "paid",
+      slotEnd: { $lte: now },
+    }).populate("client expert", "name email profileImage title role");
+
+    if (!expiredBookings.length) return;
+
+    await Booking.updateMany(
+      {
+        _id: { $in: expiredBookings.map((booking) => booking._id) },
+        status: "confirmed",
+        paymentStatus: "paid",
+        slotEnd: { $lte: now },
+      },
+      {
+        $set: { status: "completed" },
+      }
+    );
+
+    expiredBookings.forEach((booking) => {
+      const updatedBooking = { ...booking.toObject(), status: "completed" };
+      io.to(booking.client?._id?.toString?.() || String(booking.client)).emit("booking:completed", updatedBooking);
+      io.to(booking.expert?._id?.toString?.() || String(booking.expert)).emit("booking:completed", updatedBooking);
+      if (booking.meetingLink) {
+        const roomId = booking.meetingLink.split("/").filter(Boolean).pop();
+        if (roomId) {
+          io.to(roomId).emit("booking:autoCompleted", updatedBooking);
+        }
+      }
+    });
+  } catch (error) {
+    console.error("Auto-complete bookings error:", error.message);
+  }
+};
+
+setInterval(() => {
+  autoCompleteExpiredBookings();
+}, 60 * 1000);
 
 // Socket.io connection handling
 io.on('connection', (socket) => {
