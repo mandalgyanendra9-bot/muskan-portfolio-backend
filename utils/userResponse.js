@@ -1,4 +1,10 @@
 const { isAdminEmail } = require("./adminAccess");
+const {
+  getProfilePhotoCandidate,
+  getRoleLabel,
+  resolveProfilePhotoUrl,
+  setProfilePhotoFields,
+} = require("./profilePhoto");
 
 const getRequestOrigin = (req) => {
   if (!req) return "";
@@ -17,17 +23,10 @@ const toAbsoluteUrl = (value, req) => {
   return `${origin}${String(value).startsWith("/") ? value : `/${value}`}`;
 };
 
-const getRoleLabel = (user) => {
-  const role = String(user?.role || "").toLowerCase();
-  if (isAdminEmail(user?.email) || role === "admin") return "Super Admin";
-  if (role === "expert" || role === "faculty") return "Faculty";
-  if (role === "client") return "Client";
-  return role ? role.charAt(0).toUpperCase() + role.slice(1) : "Client";
-};
-
 const serializeUser = (user, req, extra = {}) => {
   const plain = typeof user?.toObject === "function" ? user.toObject() : { ...user };
-  const profileImage = plain.profileImage || plain.profilePhoto || "";
+  const profilePhotoUrl = resolveProfilePhotoUrl(getProfilePhotoCandidate(plain));
+  const legacyPhoto = getProfilePhotoCandidate(plain);
   const isSuperAdmin = isAdminEmail(plain.email) || String(plain.role || "").toLowerCase() === "admin";
 
   delete plain.password;
@@ -43,10 +42,9 @@ const serializeUser = (user, req, extra = {}) => {
   return {
     ...plain,
     ...extra,
-    profileImage,
-    profilePhoto: plain.profilePhoto || profileImage,
-    profileImageUrl: toAbsoluteUrl(profileImage, req),
-    profilePhotoUrl: toAbsoluteUrl(plain.profilePhoto || profileImage, req),
+    ...setProfilePhotoFields({}, legacyPhoto),
+    profileImageUrl: toAbsoluteUrl(legacyPhoto, req),
+    profilePhotoUrl,
     displayRole: getRoleLabel({ ...plain, isSuperAdmin }),
     isSuperAdmin,
   };

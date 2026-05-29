@@ -5,6 +5,12 @@ const crypto = require("crypto");
 const sendEmail = require("../config/email");
 const { normalizeEmail, normalizeRoleForEmail, isAdminEmail } = require("../utils/adminAccess");
 const { applyReferralReward, ensureReferralCode } = require("../utils/referrals");
+const {
+  getProfilePhotoCandidate,
+  getRoleLabel,
+  resolveProfilePhotoUrl,
+  setProfilePhotoFields,
+} = require("../utils/profilePhoto");
 
 // ─── Helper: Generate JWT ────────────────────────────────────────────────────
 const hashValue = (value) => crypto.createHash("sha256").update(String(value)).digest("hex");
@@ -35,15 +41,10 @@ const safeUser = (user) => ({
   name: user.name,
   email: user.email,
   role: user.role,
-  profileImage: user.profileImage,
-  profilePhoto: user.profilePhoto || user.profileImage,
-  profileImageUrl: user.profileImage || "",
-  profilePhotoUrl: user.profileImage || "",
-  displayRole: isAdminEmail(user.email) || user.role === "admin"
-    ? "Super Admin"
-    : user.role === "expert" || user.role === "faculty"
-      ? "Faculty"
-      : "Client",
+  ...setProfilePhotoFields({}, getProfilePhotoCandidate(user)),
+  profileImageUrl: resolveProfilePhotoUrl(user),
+  profilePhotoUrl: resolveProfilePhotoUrl(user),
+  displayRole: getRoleLabel(user),
   isSuperAdmin: isAdminEmail(user.email) || user.role === "admin",
   isEmailVerified: user.isEmailVerified,
   isApproved: user.isApproved,
@@ -492,7 +493,9 @@ exports.googleLogin = async (req, res) => {
       user = await User.create({
         name: payload.name,
         email: emailAddress,
+        profilePhotoUrl: payload.picture || "",
         profileImage: payload.picture || "",
+        googlePhoto: payload.picture || "",
         googleId: payload.sub,
         isEmailVerified: true, // Google already verified the email
         role: normalizeRoleForEmail(emailAddress),
@@ -510,8 +513,10 @@ exports.googleLogin = async (req, res) => {
         user.googleId = payload.sub;
       }
       user.isEmailVerified = true;
-      if (!user.profileImage && payload.picture) {
+      if (!getProfilePhotoCandidate(user) && payload.picture) {
+        user.profilePhotoUrl = payload.picture;
         user.profileImage = payload.picture;
+        user.googlePhoto = payload.picture;
       }
       const secureRole = normalizeRoleForEmail(user.email, user.role, { allowManualAdmin: true });
       if (user.role !== secureRole) user.role = secureRole;

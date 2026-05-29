@@ -70,7 +70,7 @@ router.put("/user/:id/block", adminOnly, async (req, res) => {
 
     res.json({
       message: `${user.name} ${user.isBlocked ? "blocked" : "unblocked"} successfully`,
-      user,
+      user: serializeUser(user, req),
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -118,7 +118,7 @@ router.put("/user/:id/verify", adminOnly, async (req, res) => {
 
     res.json({
       message: `${user.name} ${user.isEmailVerified ? "verified" : "marked unverified"} successfully`,
-      user,
+      user: serializeUser(user, req),
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -139,7 +139,7 @@ router.put("/expert/:id/approve", adminOnly, async (req, res) => {
 
     res.json({
       message: `Expert ${user.isApproved ? "approved" : "approval suspended"} successfully`,
-      user,
+      user: serializeUser(user, req),
     });
   } catch (error) {
     res.status(500).json({ message: error.message });

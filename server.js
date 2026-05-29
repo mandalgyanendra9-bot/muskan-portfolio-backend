@@ -50,7 +50,7 @@ app.use((req, res, next) => {
 });
 
 app.use(express.json());
-app.use("/uploads", express.static("uploads"));
+app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 app.use("/api", rateLimit({ windowMs: 60 * 1000, max: 240, keyPrefix: "api" }));
 
 // ROUTES

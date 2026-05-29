@@ -4,6 +4,7 @@ const User = require("../models/User");
 const authMiddleware = require("../middleware/authMiddleware");
 const upload = require("../middleware/Upload");
 const { serializeUser } = require("../utils/userResponse");
+const { uploadProfilePhoto, setProfilePhotoFields } = require("../utils/profilePhoto");
 
 const safeProfileSelect = "-password -emailVerifyToken -resetPasswordToken -resetPasswordExpires";
 
@@ -103,7 +104,10 @@ try {
       } catch { /* ignore parse errors */ }
     }
 
-    if (req.file) updateData.profileImage = `/uploads/${req.file.filename}`;
+    if (req.file) {
+      const profilePhotoUrl = await uploadProfilePhoto(req.file);
+      setProfilePhotoFields(updateData, profilePhotoUrl);
+    }
 
     if (name && title && bio) updateData.isProfileComplete = true;
     if (publicationsCount !== undefined) updateData.publicationsCount = Number(publicationsCount) || 0;

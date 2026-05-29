@@ -12,7 +12,13 @@ const userSchema = new mongoose.Schema({
   email: { type: String, unique: true, required: true },
   password: { type: String, default: null },
 
+  profilePhotoUrl: { type: String, default: "" },
+  image: { type: String, default: "" },
   profileImage: { type: String, default: "" },
+  profilePhoto: { type: String, default: "" },
+  avatar: { type: String, default: "" },
+  photoUrl: { type: String, default: "" },
+  googlePhoto: { type: String, default: "" },
   role: { type: String, enum: ["admin", "expert", "client"], default: "client" },
 
   // ─── Google OAuth ──────────────────────────────────────
