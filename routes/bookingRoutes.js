@@ -13,7 +13,7 @@ const { applyBookingEarnings, creditExpertWalletForBooking } = require("../utils
 const CALL_JOIN_EARLY_MINUTES = 10;
 const CALL_GRACE_AFTER_END_MINUTES = 5;
 
-const bookingPopulateFields = "name email profileImage title rating reviewsCount role";
+const bookingPopulateFields = "name email profilePhotoUrl profileImage profilePhoto avatar photoUrl googlePhoto title rating reviewsCount role";
 
 const getBookingRoomId = (booking) => {
   const link = booking?.meetingLink || "";
@@ -51,6 +51,17 @@ const canAccessBooking = async (booking, userId) => {
 
 const populateBooking = (query) => query.populate("client expert", bookingPopulateFields);
 
+const cancelPendingBooking = async (booking, paymentStatus = "failed", reason = "") => {
+  if (!booking) return null;
+  if (booking.paymentStatus === "paid") return booking;
+
+  booking.status = "cancelled";
+  booking.paymentStatus = paymentStatus;
+  booking.paymentFailureReason = reason ? String(reason).slice(0, 500) : "";
+  await booking.save();
+  return booking;
+};
+
 const calculateBookingPrice = (expert, durationMinutes, clientTotalPrice) => {
   const pricePerMinute = Number(expert.pricePerMinute) > 0
     ? Number(expert.pricePerMinute)
@@ -73,7 +84,8 @@ if (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
 // 1. CREATE BOOKING & ORDER
 router.post("/create-order", authMiddleware, async (req, res) => {
   try {
-    const { expert: expertId, date, slotStart, slotEnd, duration, totalPrice, notes } = req.body;
+  const { expert: expertId, date, slotStart, slotEnd, duration, totalPrice, notes } = req.body;
+  let booking = null;
     const startDate = new Date(slotStart || date);
     const requestedDuration = Math.max(1, Math.round(Number(duration) || 0));
     const endDate = slotEnd
@@ -115,7 +127,7 @@ router.post("/create-order", authMiddleware, async (req, res) => {
     }
 
     // Create Booking in DB (Pending status by default)
-    const booking = await Booking.create({
+    booking = await Booking.create({
       client: req.user.id,
       expert: expertId,
       slotStart: startDate,
@@ -131,9 +143,18 @@ router.post("/create-order", authMiddleware, async (req, res) => {
       amount: Math.round(numericTotalPrice * 100),
       currency: "INR",
       receipt: `receipt_${booking._id}`,
+      notes: {
+        bookingId: booking._id.toString(),
+        expertId: expertId.toString(),
+        clientId: req.user.id.toString(),
+      },
     };
 
     const order = await razorpay.orders.create(options);
+
+    booking.orderId = order.id;
+    booking.paymentStatus = "unpaid";
+    await booking.save();
 
     res.status(201).json({
       booking,
@@ -143,6 +164,9 @@ router.post("/create-order", authMiddleware, async (req, res) => {
       keyId: process.env.RAZORPAY_KEY_ID,
     });
   } catch (error) {
+    if (booking) {
+      await cancelPendingBooking(booking, "failed", error.message).catch(() => {});
+    }
     console.error(error);
     res.status(400).json({ message: error.message });
   }
@@ -161,22 +185,34 @@ router.post("/verify-payment", authMiddleware, async (req, res) => {
     if (!razorpay) {
       return res.status(503).json({ message: "Platform Razorpay checkout is not configured yet" });
     }
-    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+    if (!bookingId || !razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
       return res.status(400).json({ message: "Razorpay payment verification details are required" });
     }
 
-    const body = razorpay_order_id + "|" + razorpay_payment_id;
+    const bookingDoc = await Booking.findById(bookingId);
+    if (!bookingDoc) return res.status(404).json({ message: "Booking not found" });
+
+    if (bookingDoc.paymentStatus === "paid" && bookingDoc.paymentId === razorpay_payment_id) {
+      const booking = await populateBooking(Booking.findById(bookingDoc._id));
+      return res.json({ message: "Payment already verified", booking });
+    }
+
+    if (bookingDoc.orderId && bookingDoc.orderId !== razorpay_order_id) {
+      return res.status(400).json({ message: "Order mismatch for this booking" });
+    }
+
+    const body = `${razorpay_order_id}|${razorpay_payment_id}`;
     const expectedSignature = crypto
       .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
       .update(body.toString())
       .digest("hex");
 
     if (expectedSignature === razorpay_signature) {
-      const bookingDoc = await Booking.findById(bookingId);
-      if (!bookingDoc) return res.status(404).json({ message: "Booking not found" });
       bookingDoc.status = "confirmed";
       bookingDoc.paymentStatus = "paid";
       bookingDoc.paymentId = razorpay_payment_id;
+      bookingDoc.paymentFailureReason = "";
+      bookingDoc.orderId = bookingDoc.orderId || razorpay_order_id;
       await applyBookingEarnings(bookingDoc);
       await creditExpertWalletForBooking(bookingDoc);
       await bookingDoc.save();
@@ -193,6 +229,37 @@ router.post("/verify-payment", authMiddleware, async (req, res) => {
     } else {
       res.status(400).json({ message: "Invalid Signature" });
     }
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+router.post("/payment-status", authMiddleware, async (req, res) => {
+  try {
+    const { bookingId, razorpay_order_id, status, reason } = req.body;
+    const normalizedStatus = String(status || "").toLowerCase();
+
+    if (!bookingId || !["failed", "cancelled"].includes(normalizedStatus)) {
+      return res.status(400).json({ message: "Valid bookingId and payment status are required" });
+    }
+
+    const booking = await Booking.findById(bookingId);
+    if (!booking) return res.status(404).json({ message: "Booking not found" });
+    if (booking.paymentStatus === "paid") {
+      const populated = await populateBooking(Booking.findById(booking._id));
+      return res.json({ message: "Booking already paid", booking: populated });
+    }
+
+    if (booking.orderId && razorpay_order_id && booking.orderId !== razorpay_order_id) {
+      return res.status(400).json({ message: "Order mismatch for this booking" });
+    }
+
+    const updated = await cancelPendingBooking(booking, normalizedStatus, reason || "");
+    const populated = await populateBooking(Booking.findById(updated._id));
+    res.json({
+      message: `Payment marked ${normalizedStatus}`,
+      booking: populated,
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

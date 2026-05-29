@@ -18,7 +18,7 @@ const {
 } = require("../utils/earnings");
 
 const BOOKING_STATUSES = ["pending", "confirmed", "completed", "cancelled"];
-const PAYMENT_STATUSES = ["unpaid", "paid", "refunded"];
+const PAYMENT_STATUSES = ["unpaid", "paid", "refunded", "failed", "cancelled"];
 const PAYOUT_STATUSES = ["pending", "approved", "rejected", "paid"];
 
 const adminOnly = [authMiddleware, adminMiddleware];

@@ -18,6 +18,8 @@ const bookingSchema = new mongoose.Schema({
     enum: ["not_requested", "pending", "requested", "approved", "paid", "rejected"],
     default: "not_requested",
   },
+  orderId: { type: String, default: "" },
+  paymentFailureReason: { type: String, default: "" },
   isPriority: { type: Boolean, default: false },
   status: { 
     type: String, 
@@ -26,7 +28,7 @@ const bookingSchema = new mongoose.Schema({
   },
   paymentStatus: { 
     type: String, 
-    enum: ["unpaid", "paid", "refunded"], 
+    enum: ["unpaid", "paid", "refunded", "failed", "cancelled"], 
     default: "unpaid" 
   },
   paymentId: { type: String },
