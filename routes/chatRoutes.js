@@ -29,6 +29,11 @@ const emitUnreadCount = async (req, userId) => {
 router.get("/contacts", authMiddleware, async (req, res) => {
   try {
     const currentUserId = req.user.id;
+    const currentUser = await User.findById(currentUserId).select("blockedUsers blockedBy");
+    const blockedIds = [
+      ...(currentUser?.blockedUsers || []).map((id) => id.toString()),
+      ...(currentUser?.blockedBy || []).map((id) => id.toString()),
+    ];
     const recentMessages = await ChatMessage.find({
       $or: [{ sender: currentUserId }, { recipient: currentUserId }],
     })
@@ -42,10 +47,12 @@ router.get("/contacts", authMiddleware, async (req, res) => {
       if (otherId && !recentContactIds.includes(otherId)) recentContactIds.push(otherId);
     });
 
-    const users = await User.find({
-      _id: { $ne: currentUserId },
+    const userQuery = {
       isBlocked: { $ne: true },
-    })
+      _id: blockedIds.length ? { $nin: [currentUserId, ...blockedIds] } : { $ne: currentUserId },
+    };
+
+    const users = await User.find(userQuery)
       .select(safeUserSelect)
       .sort({ role: 1, name: 1 })
       .limit(200)
@@ -113,9 +120,19 @@ router.post("/messages", authMiddleware, async (req, res) => {
       return res.status(400).json({ message: "Invalid image URL" });
     }
 
-    const recipientUser = await User.findById(recipient).select("_id isBlocked");
+    const [recipientUser, senderUser] = await Promise.all([
+      User.findById(recipient).select("_id isBlocked blockedUsers blockedBy"),
+      User.findById(req.user.id).select("_id blockedUsers blockedBy"),
+    ]);
     if (!recipientUser || recipientUser.isBlocked) {
       return res.status(404).json({ message: "Recipient not found" });
+    }
+    const recipientBlockedSender = (recipientUser.blockedUsers || []).some((id) => id.toString() === req.user.id);
+    const recipientBlockedBySender = (recipientUser.blockedBy || []).some((id) => id.toString() === req.user.id);
+    const senderBlockedRecipient = (senderUser?.blockedUsers || []).some((id) => id.toString() === recipient);
+    const senderBlockedByRecipient = (senderUser?.blockedBy || []).some((id) => id.toString() === recipient);
+    if (recipientBlockedSender || recipientBlockedBySender || senderBlockedRecipient || senderBlockedByRecipient) {
+      return res.status(403).json({ message: "Messaging is disabled for this user pair" });
     }
 
     const savedDoc = await ChatMessage.create({

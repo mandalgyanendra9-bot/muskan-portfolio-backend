@@ -44,7 +44,22 @@ const getCallAccess = (booking) => {
 const canAccessBooking = async (booking, userId) => {
   const isClient = booking.client.toString() === userId;
   const isExpert = booking.expert.toString() === userId;
-  if (isClient || isExpert) return true;
+  if (isClient || isExpert) {
+    const currentUser = await User.findById(userId).select("blockedUsers blockedBy role email");
+    const otherUserId = isClient ? booking.expert.toString() : booking.client.toString();
+    const otherUser = await User.findById(otherUserId).select("blockedUsers blockedBy");
+
+    const currentBlocked = (currentUser?.blockedUsers || []).some((id) => id.toString() === otherUserId);
+    const currentBlockedBy = (currentUser?.blockedBy || []).some((id) => id.toString() === otherUserId);
+    const otherBlockedCurrent = (otherUser?.blockedUsers || []).some((id) => id.toString() === userId);
+    const otherBlockedByCurrent = (otherUser?.blockedBy || []).some((id) => id.toString() === userId);
+
+    if (currentBlocked || currentBlockedBy || otherBlockedCurrent || otherBlockedByCurrent) {
+      return false;
+    }
+
+    return true;
+  }
   const user = await User.findById(userId).select("email role");
   return hasAdminAccess(user);
 };
@@ -60,6 +75,20 @@ const cancelPendingBooking = async (booking, paymentStatus = "failed", reason = 
   booking.paymentFailureReason = reason ? String(reason).slice(0, 500) : "";
   await booking.save();
   return booking;
+};
+
+const isMutualBlock = async (userId, otherUserId) => {
+  const [currentUser, otherUser] = await Promise.all([
+    User.findById(userId).select("blockedUsers blockedBy"),
+    User.findById(otherUserId).select("blockedUsers blockedBy"),
+  ]);
+
+  return Boolean(
+    (currentUser?.blockedUsers || []).some((id) => id.toString() === otherUserId) ||
+    (currentUser?.blockedBy || []).some((id) => id.toString() === otherUserId) ||
+    (otherUser?.blockedUsers || []).some((id) => id.toString() === userId) ||
+    (otherUser?.blockedBy || []).some((id) => id.toString() === userId)
+  );
 };
 
 const calculateBookingPrice = (expert, durationMinutes, clientTotalPrice) => {
@@ -117,6 +146,10 @@ router.post("/create-order", authMiddleware, async (req, res) => {
     });
     if (bookingConflict) {
       return res.status(409).json({ message: "This slot is already booked. Please choose another time." });
+    }
+
+    if (await isMutualBlock(req.user.id, expertId)) {
+      return res.status(403).json({ message: "Booking blocked due to user privacy settings" });
     }
 
     const client = await User.findById(req.user.id).select("subscriptionPlan");

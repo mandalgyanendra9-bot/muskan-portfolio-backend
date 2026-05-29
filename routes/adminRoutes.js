@@ -5,6 +5,7 @@ const Booking = require("../models/Booking");
 const Message = require("../models/Message");
 const Project = require("../models/Project");
 const Payout = require("../models/Payout");
+const ViolationLog = require("../models/ViolationLog");
 const authMiddleware = require("../middleware/authMiddleware");
 const adminMiddleware = require("../middleware/adminMiddleware");
 const { isAdminEmail } = require("../utils/adminAccess");
@@ -396,6 +397,71 @@ router.delete("/report/:id", adminOnly, async (req, res) => {
   try {
     await Message.findByIdAndDelete(req.params.id);
     res.json({ message: "Report deleted successfully" });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// GET VIOLATION LOGS
+router.get("/violations", adminOnly, async (req, res) => {
+  try {
+    const violations = await ViolationLog.find()
+      .populate("userId", "name email role profilePhotoUrl profileImage profilePhoto avatar photoUrl googlePhoto")
+      .populate("bookingId", "meetingLink slotStart slotEnd status paymentStatus")
+      .populate("targetUserId", "name email role profilePhotoUrl profileImage profilePhoto avatar photoUrl googlePhoto isBlocked blockedUsers blockedBy")
+      .sort({ timestamp: -1 });
+
+    res.json(violations);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// MARK VIOLATION STATUS
+router.put("/violations/:id/status", adminOnly, async (req, res) => {
+  try {
+    const { status } = req.body;
+    if (!["open", "reviewed", "blocked", "dismissed"].includes(status)) {
+      return res.status(400).json({ message: "Invalid violation status" });
+    }
+
+    const violation = await ViolationLog.findById(req.params.id);
+    if (!violation) return res.status(404).json({ message: "Violation not found" });
+
+    violation.status = status;
+    await violation.save();
+    res.json({ message: "Violation updated", violation });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// BLOCK REPORTED USER
+router.post("/violations/:id/block", adminOnly, async (req, res) => {
+  try {
+    const violation = await ViolationLog.findById(req.params.id).populate("targetUserId");
+    if (!violation) return res.status(404).json({ message: "Violation not found" });
+    if (!violation.targetUserId) {
+      return res.status(400).json({ message: "Violation has no target user" });
+    }
+
+    const user = await User.findById(violation.targetUserId._id);
+    if (!user) return res.status(404).json({ message: "User not found" });
+    if (isProtectedAdmin(user)) {
+      return res.status(400).json({ message: "Admin accounts cannot be blocked" });
+    }
+
+    user.isBlocked = true;
+    await user.save();
+
+    violation.status = "blocked";
+    await violation.save();
+
+    res.json({
+      message: `${user.name} blocked successfully`,
+      user: serializeUser(user, req),
+      violation,
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

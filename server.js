@@ -65,6 +65,8 @@ app.use("/api/bookings", require("./routes/bookingRoutes"));
 app.use("/api/slots", require("./routes/slots"));
 app.use("/api/profiles", require("./routes/profileRoutes"));
 app.use("/api/reviews", require("./routes/reviewRoutes"));
+app.use("/api/media", require("./routes/mediaRoutes"));
+app.use("/api/privacy", require("./routes/privacyRoutes"));
 app.use("/api/admin", require("./routes/adminRoutes"));
 app.use("/api/payments", require("./routes/paymentRoutes"));
 app.use("/api/payouts", require("./routes/payoutRoutes"));

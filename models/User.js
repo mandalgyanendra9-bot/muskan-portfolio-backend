@@ -94,6 +94,8 @@ const userSchema = new mongoose.Schema({
   isApproved: { type: Boolean, default: false },
   isProfileComplete: { type: Boolean, default: false },
   isBlocked: { type: Boolean, default: false },
+  blockedUsers: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
+  blockedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
 
   // ─── Rating System ─────────────────────────────────────
   rating: { type: Number, default: 5 },

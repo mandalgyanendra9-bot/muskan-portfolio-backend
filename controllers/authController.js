@@ -84,6 +84,8 @@ const safeUser = (user) => ({
   coinBalance: user.coinBalance,
   subscriptionPlan: user.subscriptionPlan,
   subscriptionExpiresAt: user.subscriptionExpiresAt,
+  blockedUsers: user.blockedUsers || [],
+  blockedBy: user.blockedBy || [],
   referralCode: user.referralCode,
   referredBy: user.referredBy,
   referralCount: user.referralCount,
