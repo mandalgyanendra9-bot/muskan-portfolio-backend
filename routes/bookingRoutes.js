@@ -100,6 +100,13 @@ const calculateBookingPrice = (expert, durationMinutes, clientTotalPrice) => {
   return computed > 0 ? computed : clientPrice;
 };
 
+const getRazorpayMode = (keyId = "") => {
+  const text = String(keyId || "");
+  if (text.startsWith("rzp_test_")) return "test";
+  if (text.startsWith("rzp_live_")) return "live";
+  return "unknown";
+};
+
 let razorpay;
 if (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
   razorpay = new Razorpay({
@@ -184,6 +191,15 @@ router.post("/create-order", authMiddleware, async (req, res) => {
     };
 
     const order = await razorpay.orders.create(options);
+    const razorpayMode = getRazorpayMode(process.env.RAZORPAY_KEY_ID);
+
+    console.info("[Razorpay Booking Order Created]", {
+      bookingId: booking._id.toString(),
+      orderId: order.id,
+      amount: order.amount,
+      currency: order.currency,
+      keyMode: razorpayMode,
+    });
 
     booking.orderId = order.id;
     booking.paymentStatus = "unpaid";
@@ -195,6 +211,7 @@ router.post("/create-order", authMiddleware, async (req, res) => {
       amount: order.amount,
       currency: order.currency,
       keyId: process.env.RAZORPAY_KEY_ID,
+      keyMode: razorpayMode,
     });
   } catch (error) {
     if (booking) {
