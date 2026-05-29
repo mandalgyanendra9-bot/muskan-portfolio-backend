@@ -7,12 +7,20 @@ const roundMoney = (value) => Math.round((Number(value) || 0) * 100) / 100;
 
 const getPlatformSettings = async () => {
   const fallbackPercent = Number(process.env.PLATFORM_COMMISSION_PERCENT || DEFAULT_COMMISSION_PERCENT);
+  const fallbackWatermarkEnabled = process.env.WATERMARK_PROTECTION_ENABLED === "false" ? false : true;
 
-  return PlatformSettings.findOneAndUpdate(
+  const settings = await PlatformSettings.findOneAndUpdate(
     { key: "platform" },
-    { $setOnInsert: { commissionPercent: fallbackPercent } },
+    { $setOnInsert: { commissionPercent: fallbackPercent, watermarkProtectionEnabled: fallbackWatermarkEnabled } },
     { new: true, upsert: true, setDefaultsOnInsert: true }
   );
+
+  if (typeof settings.watermarkProtectionEnabled !== "boolean") {
+    settings.watermarkProtectionEnabled = fallbackWatermarkEnabled;
+    await settings.save();
+  }
+
+  return settings;
 };
 
 const getCommissionPercent = async () => {

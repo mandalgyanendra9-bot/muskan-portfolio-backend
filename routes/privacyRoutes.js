@@ -7,11 +7,23 @@ const authMiddleware = require("../middleware/authMiddleware");
 const adminMiddleware = require("../middleware/adminMiddleware");
 const { serializeUser } = require("../utils/userResponse");
 const { hasAdminAccess } = require("../utils/adminAccess");
+const { getPlatformSettings } = require("../utils/earnings");
 const mongoose = require("mongoose");
 
 const adminOnly = [authMiddleware, adminMiddleware];
 
 const normalizeAction = (value) => String(value || "").trim().toLowerCase();
+
+router.get("/settings", async (req, res) => {
+  try {
+    const settings = await getPlatformSettings();
+    res.json({
+      watermarkProtectionEnabled: settings.watermarkProtectionEnabled !== false,
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
 
 router.post("/violations", authMiddleware, async (req, res) => {
   try {

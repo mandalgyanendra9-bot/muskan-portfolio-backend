@@ -188,13 +188,26 @@ router.get("/settings", adminOnly, async (req, res) => {
 // UPDATE ADMIN PLATFORM SETTINGS
 router.put("/settings", adminOnly, async (req, res) => {
   try {
-    const commissionPercent = Number(req.body.commissionPercent);
-    if (Number.isNaN(commissionPercent) || commissionPercent < 0 || commissionPercent > 100) {
-      return res.status(400).json({ message: "Commission percentage must be between 0 and 100" });
+    const hasCommissionPercent = req.body.commissionPercent !== undefined && req.body.commissionPercent !== null && req.body.commissionPercent !== "";
+    const hasWatermarkFlag = req.body.watermarkProtectionEnabled !== undefined && req.body.watermarkProtectionEnabled !== null;
+    if (!hasCommissionPercent && !hasWatermarkFlag) {
+      return res.status(400).json({ message: "At least one setting must be provided" });
     }
 
     const settings = await getPlatformSettings();
-    settings.commissionPercent = commissionPercent;
+    if (hasCommissionPercent) {
+      const commissionPercent = Number(req.body.commissionPercent);
+      if (Number.isNaN(commissionPercent) || commissionPercent < 0 || commissionPercent > 100) {
+        return res.status(400).json({ message: "Commission percentage must be between 0 and 100" });
+      }
+      settings.commissionPercent = commissionPercent;
+    }
+
+    if (hasWatermarkFlag) {
+      const value = req.body.watermarkProtectionEnabled;
+      settings.watermarkProtectionEnabled = value === true || value === "true" || value === 1 || value === "1";
+    }
+
     await settings.save();
 
     res.json({ message: "Admin settings updated", settings });
