@@ -38,8 +38,15 @@ const userSchema = new mongoose.Schema({
   // ─── Professional Details ──────────────────────────────
   title: { type: String, default: "Professional" },
   category: { type: String, default: "" },      // e.g. "Web Development", "Design"
+  department: { type: String, default: "" },
+  designation: { type: String, default: "" },
+  qualification: { type: String, default: "" },
   bio: { type: String, default: "" },
   skills: [{ type: String }],
+  researchInterests: [{ type: String }],
+  googleScholarId: { type: String, default: "" },
+  orcidId: { type: String, default: "" },
+  scopusId: { type: String, default: "" },
   hourlyRate: { type: Number, default: 0 },
   pricePerMinute: { type: Number, default: 0 },
   location: { type: String, default: "" },
@@ -51,6 +58,9 @@ const userSchema = new mongoose.Schema({
 
   // ─── Portfolio Gallery ─────────────────────────────────
   portfolioGallery: [{ type: String }],          // array of /uploads/... paths
+  publicationsCount: { type: Number, default: 0 },
+  projectsCount: { type: Number, default: 0 },
+  patentsCount: { type: Number, default: 0 },
 
   // ─── Availability Schedule ─────────────────────────────
   availabilitySchedule: {

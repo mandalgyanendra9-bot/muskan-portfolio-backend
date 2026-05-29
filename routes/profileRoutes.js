@@ -3,7 +3,7 @@ const router = express.Router();
 const User = require("../models/User");
 const authMiddleware = require("../middleware/authMiddleware");
 const upload = require("../middleware/Upload");
-const { isAdminEmail } = require("../utils/adminAccess");
+const { serializeUser } = require("../utils/userResponse");
 
 const safeProfileSelect = "-password -emailVerifyToken -resetPasswordToken -resetPasswordExpires";
 
@@ -31,7 +31,7 @@ router.get("/me", authMiddleware, async (req, res) => {
     const user = await User.findById(req.user.id)
       .select("-password -emailVerifyToken -resetPasswordToken -resetPasswordExpires")
       .populate("favorites", "name email profileImage title hourlyRate");
-    res.json(user);
+    res.json(serializeUser(user, req));
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -43,7 +43,7 @@ router.get("/expert/:id", async (req, res) => {
     const expert = await User.findById(req.params.id)
       .select("-password -emailVerifyToken -resetPasswordToken -resetPasswordExpires");
     if (!expert) return res.status(404).json({ message: "Expert not found" });
-    res.json(expert);
+    res.json(serializeUser(expert, req));
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -56,9 +56,11 @@ router.put("/update", authMiddleware, upload.single("profileImage"), async (req,
 try {
 
     const {
-      name, title, category, bio, skills, hourlyRate, pricePerMinute,
+      name, title, category, department, designation, qualification, bio, skills, researchInterests,
+      googleScholarId, orcidId, scopusId, hourlyRate, pricePerMinute,
       location, role, experience, github, linkedin, portfolio,
       isAvailable, introVideo, exclusiveContent, availabilitySchedule,
+      publicationsCount, projectsCount, patentsCount,
     } = req.body;
 
     const requestedRole = role ? String(role).trim().toLowerCase() : undefined;
@@ -67,9 +69,10 @@ try {
     }
 
     const updateData = {
-      name, title, category, bio, location, experience,
+      name, title, category, department, designation, qualification, bio, location, experience,
       github, linkedin, portfolio, introVideo, exclusiveContent,
       isAvailable: isAvailable === "true" || isAvailable === true,
+      googleScholarId, orcidId, scopusId,
     };
 
     // Preserve existing role unless a valid new role is explicitly provided and differs from current
@@ -86,6 +89,12 @@ try {
         : skills.split(",").map(s => s.trim()).filter(Boolean);
     }
 
+    if (researchInterests) {
+      updateData.researchInterests = Array.isArray(researchInterests)
+        ? researchInterests
+        : String(researchInterests).split(",").map((item) => item.trim()).filter(Boolean);
+    }
+
     if (availabilitySchedule) {
       try {
         updateData.availabilitySchedule = typeof availabilitySchedule === "string"
@@ -97,12 +106,15 @@ try {
     if (req.file) updateData.profileImage = `/uploads/${req.file.filename}`;
 
     if (name && title && bio) updateData.isProfileComplete = true;
+    if (publicationsCount !== undefined) updateData.publicationsCount = Number(publicationsCount) || 0;
+    if (projectsCount !== undefined) updateData.projectsCount = Number(projectsCount) || 0;
+    if (patentsCount !== undefined) updateData.patentsCount = Number(patentsCount) || 0;
 
     const user = await User.findByIdAndUpdate(req.user.id, updateData, { new: true })
       .select("-password -emailVerifyToken -resetPasswordToken -resetPasswordExpires")
       .populate("favorites", "name email profileImage title hourlyRate");
 
-    res.json(user);
+    res.json(serializeUser(user, req));
   } catch (error) {
     res.status(400).json({ message: error.message });
   }

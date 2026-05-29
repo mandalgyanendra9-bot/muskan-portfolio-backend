@@ -3,10 +3,12 @@ const router = express.Router();
 const User = require("../models/User");
 const Booking = require("../models/Booking");
 const Message = require("../models/Message");
+const Project = require("../models/Project");
 const Payout = require("../models/Payout");
 const authMiddleware = require("../middleware/authMiddleware");
 const adminMiddleware = require("../middleware/adminMiddleware");
 const { isAdminEmail } = require("../utils/adminAccess");
+const { serializeUser } = require("../utils/userResponse");
 const {
   applyBookingEarnings,
   creditExpertWalletForBooking,
@@ -31,7 +33,24 @@ const csvEscape = (value = "") => `"${String(value ?? "").replace(/"/g, '""')}"`
 router.get("/users", adminOnly, async (req, res) => {
   try {
     const users = await User.find().select("-password").sort({ createdAt: -1 });
-    res.json(users);
+    res.json(users.map((user) => serializeUser(user, req)));
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// GET SINGLE USER PROFILE FOR ADMIN VIEW
+router.get("/users/:id", adminOnly, async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id).select("-password");
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    const projectsCount = await Project.countDocuments({ user: user._id });
+    const payload = serializeUser(user, req, {
+      projectsCount,
+    });
+
+    res.json(payload);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -52,6 +71,35 @@ router.put("/user/:id/block", adminOnly, async (req, res) => {
     res.json({
       message: `${user.name} ${user.isBlocked ? "blocked" : "unblocked"} successfully`,
       user,
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// ASSIGN USER ROLE
+router.put("/user/:id/role", adminOnly, async (req, res) => {
+  try {
+    const requestedRole = String(req.body.role || "").trim().toLowerCase();
+    if (!["client", "expert", "admin"].includes(requestedRole)) {
+      return res.status(400).json({ message: "Invalid role selected" });
+    }
+
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ message: "User not found" });
+    if (isProtectedAdmin(user)) {
+      return res.status(400).json({ message: "Super admin role cannot be changed" });
+    }
+
+    user.role = requestedRole;
+    if (requestedRole !== "expert") {
+      user.isApproved = false;
+    }
+    await user.save();
+
+    res.json({
+      message: `${user.name} role updated to ${requestedRole}`,
+      user: serializeUser(user, req),
     });
   } catch (error) {
     res.status(500).json({ message: error.message });

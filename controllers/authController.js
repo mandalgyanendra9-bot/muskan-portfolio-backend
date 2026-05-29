@@ -3,7 +3,7 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 const sendEmail = require("../config/email");
-const { normalizeEmail, normalizeRoleForEmail } = require("../utils/adminAccess");
+const { normalizeEmail, normalizeRoleForEmail, isAdminEmail } = require("../utils/adminAccess");
 const { applyReferralReward, ensureReferralCode } = require("../utils/referrals");
 
 // ─── Helper: Generate JWT ────────────────────────────────────────────────────
@@ -36,14 +36,30 @@ const safeUser = (user) => ({
   email: user.email,
   role: user.role,
   profileImage: user.profileImage,
+  profilePhoto: user.profilePhoto || user.profileImage,
+  profileImageUrl: user.profileImage || "",
+  profilePhotoUrl: user.profileImage || "",
+  displayRole: isAdminEmail(user.email) || user.role === "admin"
+    ? "Super Admin"
+    : user.role === "expert" || user.role === "faculty"
+      ? "Faculty"
+      : "Client",
+  isSuperAdmin: isAdminEmail(user.email) || user.role === "admin",
   isEmailVerified: user.isEmailVerified,
   isApproved: user.isApproved,
   isBlocked: user.isBlocked,
   isProfileComplete: user.isProfileComplete,
   title: user.title,
   category: user.category,
+  department: user.department,
+  designation: user.designation,
+  qualification: user.qualification,
   bio: user.bio,
   skills: user.skills,
+  researchInterests: user.researchInterests,
+  googleScholarId: user.googleScholarId,
+  orcidId: user.orcidId,
+  scopusId: user.scopusId,
   hourlyRate: user.hourlyRate,
   pricePerMinute: user.pricePerMinute,
   location: user.location,
@@ -53,6 +69,9 @@ const safeUser = (user) => ({
   portfolio: user.portfolio,
   introVideo: user.introVideo,
   portfolioGallery: user.portfolioGallery,
+  publicationsCount: user.publicationsCount || 0,
+  projectsCount: user.projectsCount || 0,
+  patentsCount: user.patentsCount || 0,
   availabilitySchedule: user.availabilitySchedule,
   isAvailable: user.isAvailable,
   rating: user.rating,
