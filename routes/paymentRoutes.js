@@ -18,6 +18,13 @@ if (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
   console.warn("Razorpay keys missing. Platform checkout is disabled until keys are configured.");
 }
 
+const getRazorpayMode = (keyId = "") => {
+  const text = String(keyId || "");
+  if (text.startsWith("rzp_test_")) return "test";
+  if (text.startsWith("rzp_live_")) return "live";
+  return "unknown";
+};
+
 router.post("/create-order", authMiddleware, async (req, res) => {
   try {
     const { amount, type, description, bookingId } = req.body;
@@ -35,6 +42,15 @@ router.post("/create-order", authMiddleware, async (req, res) => {
       currency: "INR",
       receipt: `receipt_${Date.now()}`,
     });
+    const keyMode = getRazorpayMode(process.env.RAZORPAY_KEY_ID);
+
+    console.info("[Razorpay Payment Order Created]", {
+      orderId: order.id,
+      amount: order.amount,
+      currency: order.currency,
+      keyMode,
+      type,
+    });
 
     const transaction = await Transaction.create({
       user: req.user.id,
@@ -51,6 +67,7 @@ router.post("/create-order", authMiddleware, async (req, res) => {
       amount: order.amount,
       currency: order.currency,
       keyId: process.env.RAZORPAY_KEY_ID,
+      keyMode,
       transactionId: transaction._id,
     });
   } catch (error) {
@@ -113,7 +130,12 @@ router.post("/verify", authMiddleware, async (req, res) => {
       }
     }
 
-    res.json({ message: "Payment verified successfully", user });
+    res.json({
+      message: "Payment verified successfully",
+      user,
+      keyId: process.env.RAZORPAY_KEY_ID,
+      keyMode: getRazorpayMode(process.env.RAZORPAY_KEY_ID),
+    });
   } catch (error) {
     console.error("Verify Payment Error:", error);
     res.status(500).json({ message: error.message });
