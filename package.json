@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
-    "backfill:profile-photos": "node scripts/backfillProfilePhotos.js"
+    "backfill:profile-photos": "node scripts/backfillProfilePhotos.js",
+    "backfill:profile-photos:dry-run": "node scripts/backfillProfilePhotos.js --dry-run"
   },
   "keywords": [],
   "author": "",
