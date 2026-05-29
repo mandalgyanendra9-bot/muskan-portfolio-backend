@@ -46,6 +46,14 @@ app.use(cors({
 app.use((req, res, next) => {
   res.setHeader("Cross-Origin-Opener-Policy", "unsafe-none");
   res.setHeader("Cross-Origin-Embedder-Policy", "unsafe-none");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.setHeader(
+    "Permissions-Policy",
+    "camera=(self), microphone=(self), geolocation=(), payment=(self), fullscreen=(self), display-capture=(self), clipboard-read=(self), clipboard-write=(self)"
+  );
+  res.setHeader("Content-Security-Policy", "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'");
   next();
 });
 
