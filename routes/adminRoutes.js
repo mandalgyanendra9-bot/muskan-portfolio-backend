@@ -358,6 +358,7 @@ router.put("/booking/:id/status", adminOnly, async (req, res) => {
         return res.status(400).json({ message: "Invalid booking status" });
       }
       booking.status = status;
+      booking.bookingStatus = status;
     }
 
     if (paymentStatus) {

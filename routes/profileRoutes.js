@@ -8,6 +8,29 @@ const { uploadProfilePhoto, setProfilePhotoFields } = require("../utils/profileP
 
 const safeProfileSelect = "-password -emailVerifyToken -resetPasswordToken -resetPasswordExpires";
 
+const normalizeClockTime = (value) => {
+  const text = String(value || "").trim().toUpperCase();
+  const directMatch = text.match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
+  if (directMatch) {
+    return `${String(Number(directMatch[1])).padStart(2, "0")}:${directMatch[2]}`;
+  }
+
+  const amPmMatch = text.match(/^(0?[1-9]|1[0-2]):([0-5]\d)\s*(AM|PM)$/);
+  if (!amPmMatch) return value;
+  let hour = Number(amPmMatch[1]);
+  if (amPmMatch[3] === "AM" && hour === 12) hour = 0;
+  if (amPmMatch[3] === "PM" && hour !== 12) hour += 12;
+  return `${String(hour).padStart(2, "0")}:${amPmMatch[2]}`;
+};
+
+const normalizeAvailabilitySchedule = (schedule = []) =>
+  (Array.isArray(schedule) ? schedule : []).map((day) => ({
+    ...day,
+    from: normalizeClockTime(day.from),
+    to: normalizeClockTime(day.to),
+    available: Boolean(day.available),
+  }));
+
 // ─── GET ALL EXPERTS (public) ─────────────────────────────────────────────────
 router.get("/experts", async (req, res) => {
   try {
@@ -31,7 +54,7 @@ router.get("/me", authMiddleware, async (req, res) => {
   try {
     const user = await User.findById(req.user.id)
       .select("-password -emailVerifyToken -resetPasswordToken -resetPasswordExpires")
-      .populate("favorites", "name email profileImage title hourlyRate");
+      .populate("favorites", "name email profileImage title hourlyRate perMinuteRate pricePerMinute");
     res.json(serializeUser(user, req));
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -58,7 +81,7 @@ try {
 
     const {
       name, title, category, department, designation, qualification, bio, skills, researchInterests,
-      googleScholarId, orcidId, scopusId, hourlyRate, pricePerMinute,
+      googleScholarId, orcidId, scopusId, hourlyRate, perMinuteRate, pricePerMinute,
       location, role, experience, github, linkedin, portfolio,
       isAvailable, introVideo, exclusiveContent, availabilitySchedule,
       publicationsCount, projectsCount, patentsCount,
@@ -82,7 +105,11 @@ try {
     }
 
     if (hourlyRate !== undefined) updateData.hourlyRate = Number(hourlyRate);
-    if (pricePerMinute !== undefined) updateData.pricePerMinute = Number(pricePerMinute);
+    const minuteRate = perMinuteRate !== undefined ? Number(perMinuteRate) : pricePerMinute !== undefined ? Number(pricePerMinute) : undefined;
+    if (minuteRate !== undefined) {
+      updateData.perMinuteRate = minuteRate;
+      updateData.pricePerMinute = minuteRate;
+    }
 
     if (skills) {
       updateData.skills = Array.isArray(skills)
@@ -101,6 +128,7 @@ try {
         updateData.availabilitySchedule = typeof availabilitySchedule === "string"
           ? JSON.parse(availabilitySchedule)
           : availabilitySchedule;
+        updateData.availabilitySchedule = normalizeAvailabilitySchedule(updateData.availabilitySchedule);
       } catch { /* ignore parse errors */ }
     }
 
@@ -116,7 +144,7 @@ try {
 
     const user = await User.findByIdAndUpdate(req.user.id, updateData, { new: true })
       .select("-password -emailVerifyToken -resetPasswordToken -resetPasswordExpires")
-      .populate("favorites", "name email profileImage title hourlyRate");
+      .populate("favorites", "name email profileImage title hourlyRate perMinuteRate pricePerMinute");
 
     res.json(serializeUser(user, req));
   } catch (error) {
@@ -179,7 +207,7 @@ router.post("/favorite/:expertId", authMiddleware, async (req, res) => {
     await user.save();
     const updatedUser = await User.findById(req.user.id)
       .select("-password")
-      .populate("favorites", "name email profileImage title hourlyRate");
+      .populate("favorites", "name email profileImage title hourlyRate perMinuteRate pricePerMinute");
     res.json(updatedUser);
   } catch (error) {
     res.status(500).json({ message: error.message });

@@ -209,6 +209,8 @@ router.post("/verify", authMiddleware, async (req, res) => {
       const booking = await Booking.findById(transaction.bookingId);
       if (booking) {
         verifyLogContext.expertId = booking.expert?.toString?.() || null;
+        booking.status = booking.status === "pending" ? "confirmed" : booking.status;
+        booking.bookingStatus = booking.status;
         booking.paymentStatus = "paid";
         booking.paymentId = razorpay_payment_id;
         await applyBookingEarnings(booking, transaction.amount);

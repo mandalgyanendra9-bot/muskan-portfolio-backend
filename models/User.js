@@ -54,6 +54,7 @@ const userSchema = new mongoose.Schema({
   orcidId: { type: String, default: "" },
   scopusId: { type: String, default: "" },
   hourlyRate: { type: Number, default: 0 },
+  perMinuteRate: { type: Number, default: 0 },
   pricePerMinute: { type: Number, default: 0 },
   location: { type: String, default: "" },
   experience: { type: String, default: "" },

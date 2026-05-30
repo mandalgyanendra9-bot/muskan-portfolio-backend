@@ -3,12 +3,13 @@ const router = express.Router();
 const Booking = require("../models/Booking");
 const User = require("../models/User");
 const authMiddleware = require("../middleware/authMiddleware");
-const moment = require('moment');
+const moment = require('moment-timezone');
 const Razorpay = require('razorpay');
 const crypto = require("crypto");
 const ChatRoom = require('../models/ChatRoom');
 const { hasAdminAccess } = require("../utils/adminAccess");
 const { applyBookingEarnings, creditExpertWalletForBooking } = require("../utils/earnings");
+const { getAvailabilityWindowForDate, getExpertTimezone, parseTimeOnDate } = require("../utils/slotGenerator");
 
 const CALL_JOIN_EARLY_MINUTES = 10;
 const CALL_GRACE_AFTER_END_MINUTES = 5;
@@ -71,6 +72,7 @@ const cancelPendingBooking = async (booking, paymentStatus = "failed", reason = 
   if (booking.paymentStatus === "paid") return booking;
 
   booking.status = "cancelled";
+  booking.bookingStatus = "cancelled";
   booking.paymentStatus = paymentStatus;
   booking.paymentFailureReason = reason ? String(reason).slice(0, 500) : "";
   await booking.save();
@@ -91,13 +93,87 @@ const isMutualBlock = async (userId, otherUserId) => {
   );
 };
 
-const calculateBookingPrice = (expert, durationMinutes, clientTotalPrice) => {
-  const pricePerMinute = Number(expert.pricePerMinute) > 0
-    ? Number(expert.pricePerMinute)
-    : Number(expert.hourlyRate || 0) / 60;
-  const computed = Math.round(pricePerMinute * durationMinutes);
-  const clientPrice = Math.round(Number(clientTotalPrice) || 0);
-  return computed > 0 ? computed : clientPrice;
+const roundMoney = (value) => Math.round((Number(value) || 0) * 100) / 100;
+
+const getExpertPerMinuteRate = (expert = {}) => roundMoney(
+  Number(expert.perMinuteRate) > 0
+    ? Number(expert.perMinuteRate)
+    : Number(expert.pricePerMinute) > 0
+      ? Number(expert.pricePerMinute)
+      : Number(expert.hourlyRate || 0) / 60
+);
+
+const calculateBookingPrice = (expert, durationMinutes) =>
+  roundMoney(getExpertPerMinuteRate(expert) * durationMinutes);
+
+const normalizeDurationMinutes = (value) => {
+  const duration = Number(value);
+  if (!Number.isInteger(duration) || duration < 1 || duration > 240) return null;
+  return duration;
+};
+
+const getClientSubmittedAmount = (body = {}) => {
+  const value = body.totalAmount ?? body.totalPrice;
+  if (value === undefined || value === null || value === "") return null;
+  const amount = Number(value);
+  return Number.isFinite(amount) ? roundMoney(amount) : null;
+};
+
+const getBookingSelection = (body = {}, expert = {}) => {
+  const timezone = getExpertTimezone(expert);
+  let start;
+  let end;
+  let durationMinutes = normalizeDurationMinutes(body.durationMinutes ?? body.duration);
+
+  if (body.date && body.startTime) {
+    const rawDate = String(body.date || "").trim();
+    const dateOnly = rawDate.includes("T")
+      ? moment(rawDate).tz(timezone).format("YYYY-MM-DD")
+      : rawDate;
+    start = parseTimeOnDate(dateOnly, body.startTime, timezone);
+    if (!start.isValid()) {
+      return { error: "Valid booking slot is required" };
+    }
+    if (!durationMinutes) {
+      return { error: "Invalid duration selected." };
+    }
+    end = start.clone().add(durationMinutes, "minutes");
+  } else {
+    if (!body.slotStart && !body.date) {
+      return { error: "Valid booking slot is required" };
+    }
+    start = body.slotStart ? moment(body.slotStart).tz(timezone) : moment(body.date).tz(timezone);
+    if (!start.isValid()) {
+      return { error: "Valid booking slot is required" };
+    }
+
+    if (body.slotEnd) {
+      end = moment(body.slotEnd).tz(timezone);
+      if (!end.isValid() || !end.isAfter(start)) {
+        return { error: "Valid booking slot is required" };
+      }
+      durationMinutes = normalizeDurationMinutes(Math.round(end.diff(start, "minutes", true)));
+    } else {
+      if (!durationMinutes) {
+        return { error: "Invalid duration selected." };
+      }
+      end = start.clone().add(durationMinutes, "minutes");
+    }
+  }
+
+  if (!durationMinutes) {
+    return { error: "Invalid duration selected." };
+  }
+
+  return {
+    start,
+    end,
+    date: start.format("YYYY-MM-DD"),
+    startTime: start.format("HH:mm"),
+    endTime: end.format("HH:mm"),
+    durationMinutes,
+    timezone,
+  };
 };
 
 const getRazorpayKeyId = () => String(process.env.RAZORPAY_KEY_ID || "").trim();
@@ -147,26 +223,13 @@ if (getRazorpayKeyId() && getRazorpayKeySecret()) {
 router.post("/create-order", authMiddleware, async (req, res) => {
   let booking = null;
   try {
-    const { expert: expertId, date, slotStart, slotEnd, duration, totalPrice, notes } = req.body;
-    const startDate = new Date(slotStart || date);
-    const requestedDuration = Math.max(1, Math.round(Number(duration) || 0));
-    const endDate = slotEnd
-      ? new Date(slotEnd)
-      : moment(startDate).add(requestedDuration, 'minutes').toDate();
-    const durationMinutes = Math.max(
-      1,
-      Math.round((endDate.getTime() - startDate.getTime()) / 60000) || requestedDuration
-    );
-
-    if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime()) || endDate <= startDate) {
-      return res.status(400).json({ message: "Valid booking slot is required" });
-    }
+    const { expert: expertId, totalPrice, totalAmount, notes } = req.body;
     if (!razorpay) {
       console.error("[Razorpay Booking Config Missing]", {
         endpoint: "POST /api/bookings/create-order",
         expertId: expertId || null,
         bookingId: null,
-        amount: Math.round((Number(totalPrice) || 0) * 100) || null,
+        amount: Math.round((Number(totalAmount ?? totalPrice) || 0) * 100) || null,
         ...getRazorpayConfigStatus(),
       });
       return res.status(500).json({ message: RAZORPAY_CONFIG_ERROR_MESSAGE });
@@ -178,14 +241,37 @@ router.post("/create-order", authMiddleware, async (req, res) => {
     if (expert.role !== "expert") return res.status(400).json({ message: "Selected user is not an expert" });
     if (!expert.isAvailable) return res.status(400).json({ message: "Expert is not accepting bookings right now" });
 
+    const bookingSelection = getBookingSelection(req.body, expert);
+    if (bookingSelection.error === "Invalid duration selected.") {
+      return res.status(400).json({ message: "Invalid duration selected." });
+    }
+    if (bookingSelection.error) {
+      return res.status(400).json({ message: bookingSelection.error });
+    }
+
+    const now = moment().tz(bookingSelection.timezone);
+    if (bookingSelection.start.isSameOrBefore(now)) {
+      return res.status(400).json({ message: "Please select a future time." });
+    }
+
+    const availabilityWindow = getAvailabilityWindowForDate(expert, bookingSelection.date);
+    if (
+      !availabilityWindow ||
+      bookingSelection.start.isBefore(availabilityWindow.start) ||
+      bookingSelection.end.isAfter(availabilityWindow.end)
+    ) {
+      return res.status(400).json({ message: "Selected time is outside expert availability." });
+    }
+
     const bookingConflict = await Booking.exists({
       expert: expertId,
       status: { $ne: "cancelled" },
-      slotStart: { $lt: endDate },
-      slotEnd: { $gt: startDate },
+      paymentStatus: { $nin: ["failed", "cancelled", "refunded"] },
+      slotStart: { $lt: bookingSelection.end.toDate() },
+      slotEnd: { $gt: bookingSelection.start.toDate() },
     });
     if (bookingConflict) {
-      return res.status(409).json({ message: "This slot is already booked. Please choose another time." });
+      return res.status(409).json({ message: "This time is already booked." });
     }
 
     if (await isMutualBlock(req.user.id, expertId)) {
@@ -193,20 +279,33 @@ router.post("/create-order", authMiddleware, async (req, res) => {
     }
 
     const client = await User.findById(req.user.id).select("subscriptionPlan");
-    const numericTotalPrice = calculateBookingPrice(expert, durationMinutes, totalPrice);
+    const perMinuteRate = getExpertPerMinuteRate(expert);
+    const numericTotalPrice = calculateBookingPrice(expert, bookingSelection.durationMinutes);
+    const clientSubmittedAmount = getClientSubmittedAmount(req.body);
 
-    if (!numericTotalPrice || numericTotalPrice <= 0) {
+    if (!perMinuteRate || perMinuteRate <= 0 || !numericTotalPrice || numericTotalPrice <= 0) {
       return res.status(400).json({ message: "Expert booking price is not configured yet" });
+    }
+    if (clientSubmittedAmount !== null && Math.abs(clientSubmittedAmount - numericTotalPrice) > 0.01) {
+      return res.status(400).json({ message: "Booking amount does not match expert per-minute pricing." });
     }
 
     // Create Booking in DB (Pending status by default)
     booking = await Booking.create({
       client: req.user.id,
+      clientId: req.user.id,
       expert: expertId,
-      slotStart: startDate,
-      slotEnd: endDate,
-      duration: durationMinutes,
+      expertId,
+      date: bookingSelection.date,
+      startTime: bookingSelection.startTime,
+      endTime: bookingSelection.endTime,
+      slotStart: bookingSelection.start.toDate(),
+      slotEnd: bookingSelection.end.toDate(),
+      duration: bookingSelection.durationMinutes,
+      durationMinutes: bookingSelection.durationMinutes,
+      perMinuteRate,
       totalPrice: numericTotalPrice,
+      totalAmount: numericTotalPrice,
       notes,
       isPriority: client?.subscriptionPlan === "premium",
       meetingLink: `/video-call/room_${Math.random().toString(36).substring(2, 9)}` // Auto-generate room link
@@ -229,6 +328,8 @@ router.post("/create-order", authMiddleware, async (req, res) => {
       bookingId: booking._id.toString(),
       expertId: expertId.toString(),
       amount: orderAmount,
+      durationMinutes: booking.durationMinutes,
+      perMinuteRate: booking.perMinuteRate,
       ...getRazorpayConfigStatus(),
     };
 
@@ -262,12 +363,16 @@ router.post("/create-order", authMiddleware, async (req, res) => {
 
     booking.orderId = order.id;
     booking.paymentStatus = "unpaid";
+    booking.bookingStatus = booking.status;
     await booking.save();
 
     res.status(201).json({
       booking,
       orderId: order.id,
       amount: order.amount,
+      totalAmount: numericTotalPrice,
+      perMinuteRate: booking.perMinuteRate,
+      durationMinutes: booking.durationMinutes,
       currency: order.currency,
       keyId: getRazorpayKeyId(),
       keyMode: razorpayMode,
@@ -280,7 +385,7 @@ router.post("/create-order", authMiddleware, async (req, res) => {
       endpoint: "POST /api/bookings/create-order",
       bookingId: booking?._id?.toString?.() || null,
       expertId: req.body?.expert || null,
-      amount: Math.round((Number(req.body?.totalPrice) || 0) * 100) || null,
+      amount: Math.round((Number(req.body?.totalAmount ?? req.body?.totalPrice) || 0) * 100) || null,
       ...getRazorpayConfigStatus(),
       message: error?.message,
       stack: error?.stack,
@@ -343,6 +448,7 @@ router.post("/verify-payment", authMiddleware, async (req, res) => {
 
     if (expectedSignature === razorpay_signature) {
       bookingDoc.status = "confirmed";
+      bookingDoc.bookingStatus = "confirmed";
       bookingDoc.paymentStatus = "paid";
       bookingDoc.paymentId = razorpay_payment_id;
       bookingDoc.paymentFailureReason = "";
@@ -438,6 +544,7 @@ router.put("/room/:roomId/complete", authMiddleware, async (req, res) => {
 
     if (booking.status === "confirmed") {
       booking.status = "completed";
+      booking.bookingStatus = "completed";
       await booking.save();
     }
 
@@ -494,6 +601,7 @@ router.put("/:id/status", authMiddleware, async (req, res) => {
     // Experts can accept/reject pending bookings, or mark them completed.
     // Clients can cancel their bookings.
     booking.status = status;
+    booking.bookingStatus = status;
     
     await booking.save();
     

@@ -4,7 +4,7 @@ const mongoose = require('mongoose');
 const moment = require('moment-timezone');
 const User = require('../models/User');
 const Booking = require('../models/Booking');
-const { generateSlotsForDate } = require('../utils/slotGenerator');
+const { DEFAULT_STEP_MINUTES, generateSlotsForDate } = require('../utils/slotGenerator');
 
 const SLOT_LOG_PREFIX = '[Slots]';
 
@@ -21,10 +21,26 @@ const getDayEntry = (availabilitySchedule = [], dayOfWeek = '') =>
     (entry) => String(entry.day || '').toLowerCase() === String(dayOfWeek || '').toLowerCase()
   );
 
+const getExpertPerMinuteRate = (expert = {}) => {
+  const perMinuteRate = Number(expert.perMinuteRate) > 0
+    ? Number(expert.perMinuteRate)
+    : Number(expert.pricePerMinute) > 0
+      ? Number(expert.pricePerMinute)
+      : Number(expert.hourlyRate || 0) / 60;
+  return Math.round(perMinuteRate * 100) / 100;
+};
+
+const parseDurationQuery = (value, fallback) => {
+  const duration = Number(value ?? fallback);
+  if (!Number.isInteger(duration) || duration < 1 || duration > 240) return null;
+  return duration;
+};
+
 // GET available slots for an expert on a given date
 router.get('/:expertId', async (req, res) => {
   const { expertId } = req.params;
   const { date } = req.query; // expected format YYYY-MM-DD
+  const requestedDuration = req.query.durationMinutes ?? req.query.duration;
 
   try {
     if (!date) return res.status(400).json({ success: false, message: 'date query param required' });
@@ -32,7 +48,7 @@ router.get('/:expertId', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid expert id' });
     }
 
-    const expert = await User.findById(expertId).select('name role availabilitySchedule timezone slotDuration');
+    const expert = await User.findById(expertId).select('name role availabilitySchedule timezone slotDuration perMinuteRate pricePerMinute hourlyRate');
     if (!expert) return res.status(404).json({ success: false, message: 'Expert not found' });
 
     // Ensure the user is an expert
@@ -46,18 +62,25 @@ router.get('/:expertId', async (req, res) => {
 
     const dayOfWeek = requestedDay.format('dddd');
     const dayEntry = getDayEntry(expert.availabilitySchedule, dayOfWeek);
+    const durationMinutes = parseDurationQuery(requestedDuration, Number(expert.slotDuration) || 30);
+    if (!durationMinutes) {
+      return res.status(400).json({ success: false, message: 'Invalid duration selected.' });
+    }
+    const ratePerMinute = getExpertPerMinuteRate(expert);
     const baseLog = {
       expertId,
       date,
       dayOfWeek,
       timezone,
+      durationMinutes,
+      stepMinutes: DEFAULT_STEP_MINUTES,
       slotDuration: expert.slotDuration,
       availability: toSafeAvailabilityLog(expert.availabilitySchedule),
     };
 
     console.info(`${SLOT_LOG_PREFIX} request`, baseLog);
 
-    if (requestedDay.clone().startOf('day').isBefore(moment.tz(timezone).startOf('day'))) {
+    if (requestedDay.clone().startOf('day').isBefore(moment().tz(timezone).startOf('day'))) {
       console.info(`${SLOT_LOG_PREFIX} result`, { expertId, date, dayOfWeek, generatedSlotsCount: 0, reason: 'past_date' });
       return res.json({ success: true, slots: [], message: 'No slots available for past dates' });
     }
@@ -67,7 +90,10 @@ router.get('/:expertId', async (req, res) => {
       return res.json({ success: true, slots: [] });
     }
 
-    const allSlots = generateSlotsForDate(expert, date);
+    const allSlots = generateSlotsForDate(expert, date, {
+      durationMinutes,
+      stepMinutes: DEFAULT_STEP_MINUTES,
+    });
 
     // Define date range for the requested day
     const dayStart = requestedDay.clone().startOf('day').toDate();
@@ -77,6 +103,7 @@ router.get('/:expertId', async (req, res) => {
     const existing = await Booking.find({
       expert: expertId,
       status: { $ne: "cancelled" },
+      paymentStatus: { $nin: ["failed", "cancelled", "refunded"] },
       slotStart: { $lt: dayEnd },
       slotEnd: { $gt: dayStart },
     }).select('slotStart slotEnd');
@@ -91,7 +118,11 @@ router.get('/:expertId', async (req, res) => {
       const slotEnd = new Date(s.end);
       const isBooked = booked.some((booking) => slotStart.getTime() < booking.end && slotEnd.getTime() > booking.start);
       return !isBooked && slotStart.getTime() > now;
-    });
+    }).map((slot) => ({
+      ...slot,
+      ratePerMinute,
+      totalAmount: Math.round(ratePerMinute * durationMinutes * 100) / 100,
+    }));
     const allGeneratedSlotsElapsed = allSlots.length > 0 && allSlots.every((slot) => new Date(slot.start).getTime() <= now);
 
     console.info(`${SLOT_LOG_PREFIX} result`, {
@@ -106,6 +137,8 @@ router.get('/:expertId', async (req, res) => {
     res.json({
       success: true,
       slots: available,
+      durationMinutes,
+      ratePerMinute,
       ...(allGeneratedSlotsElapsed ? { message: 'No slots available for past dates' } : {}),
     });
   } catch (err) {
