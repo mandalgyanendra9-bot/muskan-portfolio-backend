@@ -8,15 +8,8 @@ const Booking = require("../models/Booking");
 const authMiddleware = require("../middleware/authMiddleware");
 const { applyBookingEarnings, creditExpertWalletForBooking } = require("../utils/earnings");
 
-let razorpay;
-if (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
-  razorpay = new Razorpay({
-    key_id: process.env.RAZORPAY_KEY_ID,
-    key_secret: process.env.RAZORPAY_KEY_SECRET,
-  });
-} else {
-  console.warn("Razorpay keys missing. Platform checkout is disabled until keys are configured.");
-}
+const getRazorpayKeyId = () => String(process.env.RAZORPAY_KEY_ID || "").trim();
+const getRazorpayKeySecret = () => String(process.env.RAZORPAY_KEY_SECRET || "").trim();
 
 const getRazorpayMode = (keyId = "") => {
   const text = String(keyId || "");
@@ -24,6 +17,39 @@ const getRazorpayMode = (keyId = "") => {
   if (text.startsWith("rzp_live_")) return "live";
   return "unknown";
 };
+
+const getRazorpayConfigStatus = () => {
+  const keyId = getRazorpayKeyId();
+  const secret = getRazorpayKeySecret();
+  return {
+    hasKeyId: Boolean(keyId),
+    hasSecret: Boolean(secret),
+    keyMode: getRazorpayMode(keyId),
+  };
+};
+
+const getSafeRazorpayErrorDetails = (error) => ({
+  message: error?.error?.description || error?.error?.reason || error?.message || "Razorpay request failed",
+  statusCode: error?.statusCode || error?.error?.statusCode || error?.response?.status || null,
+  code: error?.error?.code || error?.code || null,
+});
+
+const getRazorpayResponseStatus = (error) => {
+  const statusCode = Number(getSafeRazorpayErrorDetails(error).statusCode);
+  return statusCode >= 400 && statusCode < 500 ? statusCode : 502;
+};
+
+const RAZORPAY_CONFIG_ERROR_MESSAGE = "Razorpay live keys are not configured on backend.";
+
+let razorpay;
+if (getRazorpayKeyId() && getRazorpayKeySecret()) {
+  razorpay = new Razorpay({
+    key_id: getRazorpayKeyId(),
+    key_secret: getRazorpayKeySecret(),
+  });
+} else {
+  console.warn("Razorpay keys missing. Platform checkout is disabled until keys are configured.");
+}
 
 router.post("/create-order", authMiddleware, async (req, res) => {
   try {
@@ -34,15 +60,49 @@ router.post("/create-order", authMiddleware, async (req, res) => {
       return res.status(400).json({ message: "Valid amount and type are required" });
     }
     if (!razorpay) {
-      return res.status(503).json({ message: "Platform Razorpay checkout is not configured yet" });
+      console.error("[Razorpay Payment Config Missing]", {
+        endpoint: "POST /api/payments/create-order",
+        bookingId: bookingId || null,
+        expertId: null,
+        amount: Math.round(numericAmount * 100),
+        type,
+        ...getRazorpayConfigStatus(),
+      });
+      return res.status(500).json({ message: RAZORPAY_CONFIG_ERROR_MESSAGE });
     }
 
-    const order = await razorpay.orders.create({
-      amount: Math.round(numericAmount * 100),
-      currency: "INR",
-      receipt: `receipt_${Date.now()}`,
-    });
-    const keyMode = getRazorpayMode(process.env.RAZORPAY_KEY_ID);
+    const orderAmount = Math.round(numericAmount * 100);
+    const orderLogContext = {
+      endpoint: "POST /api/payments/create-order",
+      bookingId: bookingId || null,
+      expertId: null,
+      amount: orderAmount,
+      type,
+      ...getRazorpayConfigStatus(),
+    };
+
+    console.info("[Razorpay Payment Create Order Request]", orderLogContext);
+
+    let order;
+    try {
+      order = await razorpay.orders.create({
+        amount: orderAmount,
+        currency: "INR",
+        receipt: `receipt_${Date.now()}`,
+      });
+    } catch (error) {
+      const razorpayError = getSafeRazorpayErrorDetails(error);
+      console.error("[Razorpay Payment Create Order Failed]", {
+        ...orderLogContext,
+        razorpayError,
+        stack: error?.stack,
+      });
+      return res.status(getRazorpayResponseStatus(error)).json({
+        message: "Razorpay order creation failed",
+        razorpayError,
+      });
+    }
+    const keyMode = getRazorpayMode(getRazorpayKeyId());
 
     console.info("[Razorpay Payment Order Created]", {
       orderId: order.id,
@@ -66,22 +126,46 @@ router.post("/create-order", authMiddleware, async (req, res) => {
       orderId: order.id,
       amount: order.amount,
       currency: order.currency,
-      keyId: process.env.RAZORPAY_KEY_ID,
+      keyId: getRazorpayKeyId(),
       keyMode,
       transactionId: transaction._id,
     });
   } catch (error) {
-    console.error("Create Order Error:", error);
+    console.error("[Payment Create Order Error]", {
+      endpoint: "POST /api/payments/create-order",
+      bookingId: req.body?.bookingId || null,
+      expertId: null,
+      amount: Math.round((Number(req.body?.amount) || 0) * 100) || null,
+      type: req.body?.type || null,
+      ...getRazorpayConfigStatus(),
+      message: error?.message,
+      stack: error?.stack,
+    });
     res.status(500).json({ message: error.message });
   }
 });
 
 router.post("/verify", authMiddleware, async (req, res) => {
+  const verifyLogContext = {
+    endpoint: "POST /api/payments/verify",
+    bookingId: null,
+    expertId: null,
+    amount: null,
+    ...getRazorpayConfigStatus(),
+  };
+
   try {
     const { razorpay_order_id, razorpay_payment_id, razorpay_signature, transactionId } = req.body;
 
     if (!razorpay) {
-      return res.status(503).json({ message: "Platform Razorpay checkout is not configured yet" });
+      console.error("[Razorpay Payment Config Missing]", {
+        endpoint: "POST /api/payments/verify",
+        bookingId: null,
+        expertId: null,
+        amount: null,
+        ...getRazorpayConfigStatus(),
+      });
+      return res.status(500).json({ message: RAZORPAY_CONFIG_ERROR_MESSAGE });
     }
     if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature || !transactionId) {
       return res.status(400).json({ message: "Razorpay payment verification details are required" });
@@ -89,7 +173,7 @@ router.post("/verify", authMiddleware, async (req, res) => {
 
     const body = `${razorpay_order_id}|${razorpay_payment_id}`;
     const expectedSignature = crypto
-      .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
+      .createHmac("sha256", getRazorpayKeySecret())
       .update(body)
       .digest("hex");
 
@@ -102,6 +186,8 @@ router.post("/verify", authMiddleware, async (req, res) => {
     if (!transaction) {
       return res.status(404).json({ message: "Transaction not found" });
     }
+    verifyLogContext.bookingId = transaction.bookingId?.toString?.() || null;
+    verifyLogContext.amount = Math.round((Number(transaction.amount) || 0) * 100) || null;
 
     transaction.status = "success";
     transaction.razorpayPaymentId = razorpay_payment_id;
@@ -122,6 +208,7 @@ router.post("/verify", authMiddleware, async (req, res) => {
     } else if (transaction.type === "booking_payment" && transaction.bookingId) {
       const booking = await Booking.findById(transaction.bookingId);
       if (booking) {
+        verifyLogContext.expertId = booking.expert?.toString?.() || null;
         booking.paymentStatus = "paid";
         booking.paymentId = razorpay_payment_id;
         await applyBookingEarnings(booking, transaction.amount);
@@ -133,11 +220,15 @@ router.post("/verify", authMiddleware, async (req, res) => {
     res.json({
       message: "Payment verified successfully",
       user,
-      keyId: process.env.RAZORPAY_KEY_ID,
-      keyMode: getRazorpayMode(process.env.RAZORPAY_KEY_ID),
+      keyId: getRazorpayKeyId(),
+      keyMode: getRazorpayMode(getRazorpayKeyId()),
     });
   } catch (error) {
-    console.error("Verify Payment Error:", error);
+    console.error("[Payment Verify Error]", {
+      ...verifyLogContext,
+      message: error?.message,
+      stack: error?.stack,
+    });
     res.status(500).json({ message: error.message });
   }
 });
