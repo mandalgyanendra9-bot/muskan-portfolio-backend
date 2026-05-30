@@ -92,6 +92,7 @@ router.get('/:expertId', async (req, res) => {
       const isBooked = booked.some((booking) => slotStart.getTime() < booking.end && slotEnd.getTime() > booking.start);
       return !isBooked && slotStart.getTime() > now;
     });
+    const allGeneratedSlotsElapsed = allSlots.length > 0 && allSlots.every((slot) => new Date(slot.start).getTime() <= now);
 
     console.info(`${SLOT_LOG_PREFIX} result`, {
       expertId,
@@ -102,7 +103,11 @@ router.get('/:expertId', async (req, res) => {
       bookedSlotsCount: existing.length,
     });
 
-    res.json({ success: true, slots: available });
+    res.json({
+      success: true,
+      slots: available,
+      ...(allGeneratedSlotsElapsed ? { message: 'No slots available for past dates' } : {}),
+    });
   } catch (err) {
     console.error(`${SLOT_LOG_PREFIX} error`, {
       expertId,
