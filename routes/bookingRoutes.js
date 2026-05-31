@@ -43,9 +43,9 @@ const getCallAccess = (booking) => {
     joinOpensAt: new Date(joinOpensAt),
     graceEndsAt: endAt,
     remainingMs: Math.max(0, endsAt - now),
-    canJoin: isConfirmedPaid && startsAt > 0 && endsAt > 0 && now >= joinOpensAt && now <= endsAt,
+    canJoin: isConfirmedPaid && startsAt > 0 && endsAt > 0 && now >= joinOpensAt && now < endsAt,
     isEarly: isConfirmedPaid && now < joinOpensAt,
-    isExpired: endsAt > 0 && (now > endsAt || booking.status === "completed"),
+    isExpired: endsAt > 0 && (now >= endsAt || booking.status === "completed"),
   };
 };
 
@@ -566,12 +566,14 @@ router.get("/room/:roomId", authMiddleware, async (req, res) => {
 
     const hasAccess = await canAccessBooking(bookingDoc, req.user.id);
     if (!hasAccess) return res.status(403).json({ message: "You are not authorized for this meeting" });
-    if (bookingDoc.status !== "confirmed" || bookingDoc.paymentStatus !== "paid") {
+    const callAccess = getCallAccess(bookingDoc);
+    const canLoadEndedPaidBooking = bookingDoc.status === "completed" && bookingDoc.paymentStatus === "paid" && callAccess.isExpired;
+    if ((bookingDoc.status !== "confirmed" || bookingDoc.paymentStatus !== "paid") && !canLoadEndedPaidBooking) {
       return res.status(403).json({ message: "This meeting is available only after confirmed payment" });
     }
 
     const booking = await populateBooking(Booking.findById(bookingDoc._id));
-    res.json({ booking: formatBookingForResponse(booking), callAccess: getCallAccess(bookingDoc) });
+    res.json({ booking: formatBookingForResponse(booking), callAccess });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -587,7 +589,7 @@ router.put("/room/:roomId/complete", authMiddleware, async (req, res) => {
 
     const hasAccess = await canAccessBooking(booking, req.user.id);
     if (!hasAccess) return res.status(403).json({ message: "You are not authorized for this meeting" });
-    if (booking.status !== "confirmed" || booking.paymentStatus !== "paid") {
+    if (!["confirmed", "completed"].includes(booking.status) || booking.paymentStatus !== "paid") {
       return res.status(403).json({ message: "Only confirmed paid bookings can be completed from the meeting room" });
     }
 
@@ -600,6 +602,10 @@ router.put("/room/:roomId/complete", authMiddleware, async (req, res) => {
     if (booking.status === "confirmed") {
       booking.status = "completed";
       booking.bookingStatus = "completed";
+      booking.completedAt = booking.completedAt || new Date();
+      await booking.save();
+    } else if (booking.status === "completed" && !booking.completedAt) {
+      booking.completedAt = new Date();
       await booking.save();
     }
 

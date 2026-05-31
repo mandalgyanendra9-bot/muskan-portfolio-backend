@@ -52,6 +52,7 @@ const bookingSchema = new mongoose.Schema({
   videoCallUrl: { type: String, default: "" },
   ratingGiven: { type: Boolean, default: false },
   notes: { type: String },
+  completedAt: { type: Date, default: null },
   createdAt: { type: Date, default: Date.now }
 });
 

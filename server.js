@@ -107,6 +107,7 @@ app.set("io", io);
 
 const LiveStream = require("./models/LiveStream");
 const Booking = require("./models/Booking");
+const { getCanonicalBookingTimes } = require("./utils/bookingTime");
 const liveViewers = new Map();
 
 const emitLiveViewerCount = async (roomId) => {
@@ -143,25 +144,38 @@ const autoCompleteExpiredBookings = async () => {
     const expiredBookings = await Booking.find({
       status: "confirmed",
       paymentStatus: "paid",
-      slotEnd: { $lte: now },
+      $or: [
+        { endAt: { $lte: now } },
+        { endAt: null },
+      ],
     }).populate("client expert", "name email profileImage title role");
 
     if (!expiredBookings.length) return;
 
+    const expiredIds = expiredBookings
+      .filter((booking) => {
+        const { endAt } = getCanonicalBookingTimes(booking);
+        return endAt && endAt.getTime() <= now.getTime();
+      })
+      .map((booking) => booking._id);
+
+    if (!expiredIds.length) return;
+
     await Booking.updateMany(
       {
-        _id: { $in: expiredBookings.map((booking) => booking._id) },
+        _id: { $in: expiredIds },
         status: "confirmed",
         paymentStatus: "paid",
-        slotEnd: { $lte: now },
       },
       {
-        $set: { status: "completed", bookingStatus: "completed" },
+        $set: { status: "completed", bookingStatus: "completed", completedAt: now },
       }
     );
 
-    expiredBookings.forEach((booking) => {
-      const updatedBooking = { ...booking.toObject(), status: "completed" };
+    expiredBookings
+      .filter((booking) => expiredIds.some((id) => id.toString() === booking._id.toString()))
+      .forEach((booking) => {
+      const updatedBooking = { ...booking.toObject(), status: "completed", bookingStatus: "completed", completedAt: now };
       io.to(booking.client?._id?.toString?.() || String(booking.client)).emit("booking:completed", updatedBooking);
       io.to(booking.expert?._id?.toString?.() || String(booking.expert)).emit("booking:completed", updatedBooking);
       if (booking.meetingLink) {

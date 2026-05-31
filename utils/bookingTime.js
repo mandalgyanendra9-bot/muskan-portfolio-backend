@@ -91,6 +91,7 @@ const formatBookingForResponse = (booking) => {
     timezone,
     videoCallUrl,
     meetingLink: plain.meetingLink || videoCallUrl,
+    completedAt: plain.completedAt || null,
   };
 };
 
