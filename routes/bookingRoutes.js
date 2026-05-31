@@ -11,14 +11,13 @@ const { hasAdminAccess } = require("../utils/adminAccess");
 const { applyBookingEarnings, creditExpertWalletForBooking } = require("../utils/earnings");
 const { getAvailabilityWindowForDate, getExpertTimezone, parseTimeOnDate } = require("../utils/slotGenerator");
 
-const CALL_JOIN_EARLY_MINUTES = 10;
+const CALL_JOIN_EARLY_MINUTES = 30;
 const CALL_GRACE_AFTER_END_MINUTES = 5;
 
 const bookingPopulateFields = "name email profilePhotoUrl profileImage profilePhoto avatar photoUrl googlePhoto title rating reviewsCount role";
 
 const getBookingRoomId = (booking) => {
-  const link = booking?.meetingLink || "";
-  return link.split("/").filter(Boolean).pop() || "";
+  return booking?._id?.toString?.() || "";
 };
 
 const getCallAccess = (booking) => {
@@ -43,11 +42,15 @@ const getCallAccess = (booking) => {
 };
 
 const canAccessBooking = async (booking, userId) => {
-  const isClient = booking.client.toString() === userId;
-  const isExpert = booking.expert.toString() === userId;
+  const clientObjectId = booking.clientId || booking.client;
+  const expertObjectId = booking.expertId || booking.expert;
+  const clientId = clientObjectId?.toString?.();
+  const expertId = expertObjectId?.toString?.();
+  const isClient = clientId === userId;
+  const isExpert = expertId === userId;
   if (isClient || isExpert) {
     const currentUser = await User.findById(userId).select("blockedUsers blockedBy role email");
-    const otherUserId = isClient ? booking.expert.toString() : booking.client.toString();
+    const otherUserId = isClient ? expertId : clientId;
     const otherUser = await User.findById(otherUserId).select("blockedUsers blockedBy");
 
     const currentBlocked = (currentUser?.blockedUsers || []).some((id) => id.toString() === otherUserId);
@@ -308,7 +311,7 @@ router.post("/create-order", authMiddleware, async (req, res) => {
       totalAmount: numericTotalPrice,
       notes,
       isPriority: client?.subscriptionPlan === "premium",
-      meetingLink: `/video-call/room_${Math.random().toString(36).substring(2, 9)}` // Auto-generate room link
+      meetingLink: `/video-call/${bookingSelection.start.valueOf()}_${Math.random().toString(36).substring(2, 9)}`
     });
 
     const orderAmount = Math.round(numericTotalPrice * 100);
@@ -364,6 +367,7 @@ router.post("/create-order", authMiddleware, async (req, res) => {
     booking.orderId = order.id;
     booking.paymentStatus = "unpaid";
     booking.bookingStatus = booking.status;
+    booking.meetingLink = `/video-call/${booking._id}`;
     await booking.save();
 
     res.status(201).json({
@@ -428,11 +432,24 @@ router.post("/verify-payment", authMiddleware, async (req, res) => {
 
     const bookingDoc = await Booking.findById(bookingId);
     if (!bookingDoc) return res.status(404).json({ message: "Booking not found" });
+    if (String(bookingDoc.clientId || bookingDoc.client) !== String(req.user.id)) {
+      return res.status(403).json({ message: "You are not authorized to verify this booking payment" });
+    }
     verifyLogContext.expertId = bookingDoc.expert?.toString?.() || null;
     verifyLogContext.amount = Math.round((Number(bookingDoc.totalPrice) || 0) * 100) || null;
 
     if (bookingDoc.paymentStatus === "paid" && bookingDoc.paymentId === razorpay_payment_id) {
       const booking = await populateBooking(Booking.findById(bookingDoc._id));
+      console.info("[Payment Success Booking Response]", {
+        bookingId: booking._id?.toString?.(),
+        clientId: booking.clientId?.toString?.() || booking.client?._id?.toString?.() || booking.client?.toString?.(),
+        expertId: booking.expertId?.toString?.() || booking.expert?._id?.toString?.() || booking.expert?.toString?.(),
+        paymentStatus: booking.paymentStatus,
+        status: booking.status,
+        startTime: booking.startTime,
+        date: booking.date,
+        duration: booking.durationMinutes || booking.duration,
+      });
       return res.json({ message: "Payment already verified", booking });
     }
 
@@ -447,6 +464,8 @@ router.post("/verify-payment", authMiddleware, async (req, res) => {
       .digest("hex");
 
     if (expectedSignature === razorpay_signature) {
+      bookingDoc.clientId = bookingDoc.clientId || bookingDoc.client;
+      bookingDoc.expertId = bookingDoc.expertId || bookingDoc.expert;
       bookingDoc.status = "confirmed";
       bookingDoc.bookingStatus = "confirmed";
       bookingDoc.paymentStatus = "paid";
@@ -464,6 +483,17 @@ router.post("/verify-payment", authMiddleware, async (req, res) => {
         { $setOnInsert: { booking: booking._id, participants: [booking.client, booking.expert] } },
         { upsert: true, new: true }
       );
+
+      console.info("[Payment Success Booking Response]", {
+        bookingId: booking._id?.toString?.(),
+        clientId: booking.clientId?.toString?.() || booking.client?._id?.toString?.() || booking.client?.toString?.(),
+        expertId: booking.expertId?.toString?.() || booking.expert?._id?.toString?.() || booking.expert?.toString?.(),
+        paymentStatus: booking.paymentStatus,
+        status: booking.status,
+        startTime: booking.startTime,
+        date: booking.date,
+        duration: booking.durationMinutes || booking.duration,
+      });
       
       res.json({ message: "Payment Verified Successfully", booking });
     } else {
@@ -514,7 +544,8 @@ router.post("/payment-status", authMiddleware, async (req, res) => {
 router.get("/room/:roomId", authMiddleware, async (req, res) => {
   try {
     const roomId = req.params.roomId;
-    const bookingDoc = await Booking.findOne({ meetingLink: `/video-call/${roomId}` });
+    const bookingDoc = await Booking.findById(roomId).catch(() => null)
+      || await Booking.findOne({ meetingLink: `/video-call/${roomId}` });
     if (!bookingDoc) return res.status(404).json({ message: "Meeting room not found" });
 
     const hasAccess = await canAccessBooking(bookingDoc, req.user.id);
@@ -531,7 +562,8 @@ router.get("/room/:roomId", authMiddleware, async (req, res) => {
 router.put("/room/:roomId/complete", authMiddleware, async (req, res) => {
   try {
     const roomId = req.params.roomId;
-    const booking = await Booking.findOne({ meetingLink: `/video-call/${roomId}` });
+    const booking = await Booking.findById(roomId).catch(() => null)
+      || await Booking.findOne({ meetingLink: `/video-call/${roomId}` });
     if (!booking) return res.status(404).json({ message: "Meeting room not found" });
 
     const hasAccess = await canAccessBooking(booking, req.user.id);
@@ -562,11 +594,30 @@ router.put("/room/:roomId/complete", authMiddleware, async (req, res) => {
 // 3. GET MY BOOKINGS
 router.get("/my-bookings", authMiddleware, async (req, res) => {
   try {
-    const bookings = await Booking.find({
-      $or: [{ client: req.user.id }, { expert: req.user.id }]
-    })
+    const userId = req.user._id || req.user.id;
+    const query = req.authUser?.role === "expert"
+      ? { $or: [{ expertId: userId }, { expert: userId }] }
+      : { $or: [{ clientId: userId }, { client: userId }] };
+
+    const bookings = await Booking.find(query)
       .populate("client expert", bookingPopulateFields)
       .sort({ isPriority: -1, slotStart: 1 });
+
+    console.info("[My Bookings Fetch]", {
+      userId: userId?.toString?.() || String(userId),
+      role: req.authUser?.role || null,
+      query,
+      count: bookings.length,
+    });
+    bookings.forEach((booking) => {
+      console.info("[Booking Client Compare]", {
+        bookingId: booking._id?.toString?.(),
+        bookingClientId: booking.clientId?.toString?.() || booking.client?._id?.toString?.() || booking.client?.toString?.(),
+        loggedInUserId: userId?.toString?.() || String(userId),
+        matches: String(booking.clientId || booking.client?._id || booking.client) === String(userId),
+      });
+    });
+
     res.json(bookings);
   } catch (error) {
     res.status(500).json({ message: error.message });
