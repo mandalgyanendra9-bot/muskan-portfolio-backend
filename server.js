@@ -156,7 +156,7 @@ const autoCompleteExpiredBookings = async () => {
         slotEnd: { $lte: now },
       },
       {
-        $set: { status: "completed" },
+        $set: { status: "completed", bookingStatus: "completed" },
       }
     );
 

@@ -8,6 +8,24 @@ const { uploadProfilePhoto, setProfilePhotoFields } = require("../utils/profileP
 
 const safeProfileSelect = "-password -emailVerifyToken -resetPasswordToken -resetPasswordExpires";
 
+const getPublicExpertRate = (expert = {}) => {
+  const rate = Number(expert.perMinuteRate) > 0
+    ? Number(expert.perMinuteRate)
+    : Number(expert.pricePerMinute) > 0
+      ? Number(expert.pricePerMinute)
+      : Number(expert.hourlyRate || 0) / 60;
+  return Math.round(rate * 100) / 100;
+};
+
+const isPublicExpertVisible = (expert = {}) => (
+  expert.role === "expert" &&
+  expert.isAvailable &&
+  expert.isApproved &&
+  !expert.isBlocked &&
+  String(expert.name || "").trim().toLowerCase() !== "codex test expert" &&
+  getPublicExpertRate(expert) > 0
+);
+
 const normalizeClockTime = (value) => {
   const text = String(value || "").trim().toUpperCase();
   const directMatch = text.match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
@@ -57,15 +75,20 @@ const validateAvailabilitySchedule = (schedule = []) => {
 // ─── GET ALL EXPERTS (public) ─────────────────────────────────────────────────
 router.get("/experts", async (req, res) => {
   try {
-    let experts = await User.find({ role: "expert", isAvailable: true, isApproved: true })
+    const experts = await User.find({
+      role: "expert",
+      isAvailable: true,
+      isApproved: true,
+      isBlocked: { $ne: true },
+      name: { $ne: "Codex Test Expert" },
+      $or: [
+        { perMinuteRate: { $gt: 0 } },
+        { pricePerMinute: { $gt: 0 } },
+        { hourlyRate: { $gt: 0 } },
+      ],
+    })
       .select("-password -emailVerifyToken -resetPasswordToken -resetPasswordExpires")
       .sort({ createdAt: -1 });
-
-    if (experts.length === 0) {
-      experts = await User.find({ role: "expert" })
-        .select("-password -emailVerifyToken -resetPasswordToken -resetPasswordExpires")
-        .sort({ createdAt: -1 });
-    }
     res.json(experts);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -90,6 +113,9 @@ router.get("/expert/:id", async (req, res) => {
     const expert = await User.findById(req.params.id)
       .select("-password -emailVerifyToken -resetPasswordToken -resetPasswordExpires");
     if (!expert) return res.status(404).json({ message: "Expert not found" });
+    if (!isPublicExpertVisible(expert)) {
+      return res.status(404).json({ message: "Expert not found" });
+    }
     res.json(serializeUser(expert, req));
   } catch (error) {
     res.status(500).json({ message: error.message });

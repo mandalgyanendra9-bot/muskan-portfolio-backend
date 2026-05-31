@@ -7,6 +7,7 @@ const DEFAULT_TIMEZONE = 'Asia/Kolkata';
 
 const getExpertTimezone = (expert = {}) => {
   const timezone = expert.timezone || DEFAULT_TIMEZONE;
+  if (!expert.timezone || timezone === 'UTC') return DEFAULT_TIMEZONE;
   return moment.tz.zone(timezone) ? timezone : DEFAULT_TIMEZONE;
 };
 

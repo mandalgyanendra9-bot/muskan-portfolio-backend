@@ -152,6 +152,7 @@ router.get('/:expertId', async (req, res) => {
       return !isBooked;
     }).map((slot) => ({
       ...slot,
+      timezone,
       ratePerMinute,
       totalAmount: Math.round(ratePerMinute * durationMinutes * 100) / 100,
     }));
@@ -175,6 +176,7 @@ router.get('/:expertId', async (req, res) => {
       slots: available,
       durationMinutes,
       ratePerMinute,
+      timezone,
     });
   } catch (err) {
     console.error(`${SLOT_LOG_PREFIX} error`, {

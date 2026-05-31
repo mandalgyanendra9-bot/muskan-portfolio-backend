@@ -55,7 +55,7 @@ router.post("/violations", authMiddleware, async (req, res) => {
 
     const populated = await ViolationLog.findById(log._id)
       .populate("userId", "name email role profilePhotoUrl profileImage profilePhoto avatar photoUrl googlePhoto")
-      .populate("bookingId", "meetingLink slotStart slotEnd status paymentStatus")
+      .populate("bookingId", "meetingLink videoCallUrl startAt endAt timezone slotStart slotEnd status paymentStatus")
       .populate("targetUserId", "name email role profilePhotoUrl profileImage profilePhoto avatar photoUrl googlePhoto isBlocked blockedUsers blockedBy");
 
     res.status(201).json({ message: "Violation logged", violation: populated });
@@ -68,7 +68,7 @@ router.get("/violations", adminOnly, async (req, res) => {
   try {
     const logs = await ViolationLog.find()
       .populate("userId", "name email role profilePhotoUrl profileImage profilePhoto avatar photoUrl googlePhoto")
-      .populate("bookingId", "meetingLink slotStart slotEnd status paymentStatus")
+      .populate("bookingId", "meetingLink videoCallUrl startAt endAt timezone slotStart slotEnd status paymentStatus")
       .populate("targetUserId", "name email role profilePhotoUrl profileImage profilePhoto avatar photoUrl googlePhoto isBlocked blockedUsers blockedBy")
       .sort({ timestamp: -1 });
 

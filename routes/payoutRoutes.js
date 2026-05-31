@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const Booking = require("../models/Booking");
 const Payout = require("../models/Payout");
+const PayoutAuditLog = require("../models/PayoutAuditLog");
 const User = require("../models/User");
 const authMiddleware = require("../middleware/authMiddleware");
 const adminMiddleware = require("../middleware/adminMiddleware");
@@ -15,7 +16,7 @@ const {
 
 const adminOnly = [authMiddleware, adminMiddleware];
 const VALID_PAYOUT_METHODS = ["upi", "bank"];
-const ACTIVE_PAYOUT_STATUSES = ["pending", "approved"];
+const ACTIVE_PAYOUT_STATUSES = ["requested", "pending", "approved", "processing"];
 
 const requireExpert = async (req, res) => {
   const expert = await User.findById(req.user.id);
@@ -146,7 +147,7 @@ router.post("/request", authMiddleware, async (req, res) => {
       platformCommissionPercent: wallet.platformCommissionPercent,
       payoutMethod: settings.payoutMethod,
       payoutDetails: getPayoutDetailsSnapshot(settings),
-      status: "pending",
+      status: "requested",
     });
 
     await Booking.updateMany(
@@ -177,30 +178,55 @@ router.get("/pending", adminOnly, async (req, res) => {
 
 router.put("/:id/approve", adminOnly, async (req, res) => {
   try {
-    const transactionId = String(req.body.transactionId || req.body.transactionReference || "").trim();
     const payout = await Payout.findById(req.params.id);
     if (!payout) return res.status(404).json({ message: "Payout not found" });
-    if (!ACTIVE_PAYOUT_STATUSES.includes(payout.status)) {
-      return res.status(400).json({ message: "Payout is not awaiting payment" });
-    }
-    if (!transactionId) {
-      return res.status(400).json({ message: "Transaction ID / UTR number is required to mark payout as paid" });
+    if (!["requested", "pending"].includes(payout.status)) {
+      return res.status(400).json({ message: "Only requested payouts can be approved first" });
     }
 
-    payout.status = "paid";
-    payout.approvedBy = payout.approvedBy || req.user.id;
-    payout.approvedAt = payout.approvedAt || new Date();
-    payout.transactionId = transactionId;
+    payout.status = "approved";
+    payout.approvedBy = req.user.id;
+    payout.approvedAt = new Date();
     payout.processedBy = req.user.id;
     payout.processedAt = new Date();
-    payout.paidAt = new Date();
     await payout.save();
     await Booking.updateMany(
       { _id: { $in: payout.bookings || [] }, expert: payout.expert },
-      { $set: { payoutStatus: "paid" } }
+      { $set: { payoutStatus: "approved" } }
+    );
+    await PayoutAuditLog.create({
+      admin: req.user.id,
+      payout: payout._id,
+      amount: payout.amount || payout.netAmount || 0,
+      transactionId: "",
+      action: "payout_approved",
+      timestamp: new Date(),
+    });
+
+    res.json({ message: "Payout approved. Mark it paid only after actual transfer proof is available.", payout });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+router.put("/:id/processing", adminOnly, async (req, res) => {
+  try {
+    const payout = await Payout.findById(req.params.id);
+    if (!payout) return res.status(404).json({ message: "Payout not found" });
+    if (payout.status !== "approved") {
+      return res.status(400).json({ message: "Only approved payouts can be moved to processing" });
+    }
+
+    payout.status = "processing";
+    payout.processedBy = req.user.id;
+    payout.processedAt = new Date();
+    await payout.save();
+    await Booking.updateMany(
+      { _id: { $in: payout.bookings || [] }, expert: payout.expert },
+      { $set: { payoutStatus: "processing" } }
     );
 
-    res.json({ message: "Payout marked as paid", payout });
+    res.json({ message: "Payout marked processing", payout });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

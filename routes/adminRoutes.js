@@ -5,11 +5,14 @@ const Booking = require("../models/Booking");
 const Message = require("../models/Message");
 const Project = require("../models/Project");
 const Payout = require("../models/Payout");
+const PayoutAuditLog = require("../models/PayoutAuditLog");
 const ViolationLog = require("../models/ViolationLog");
 const authMiddleware = require("../middleware/authMiddleware");
 const adminMiddleware = require("../middleware/adminMiddleware");
+const uploadPayoutProof = require("../middleware/PayoutProofUpload");
 const { isAdminEmail } = require("../utils/adminAccess");
 const { serializeUser } = require("../utils/userResponse");
+const { formatBookingForResponse, formatBookingsForResponse } = require("../utils/bookingTime");
 const {
   applyBookingEarnings,
   creditExpertWalletForBooking,
@@ -20,8 +23,10 @@ const {
 
 const BOOKING_STATUSES = ["pending", "confirmed", "completed", "cancelled"];
 const PAYMENT_STATUSES = ["unpaid", "paid", "refunded", "failed", "cancelled"];
-const PAYOUT_STATUSES = ["pending", "approved", "rejected", "paid"];
-const ACTIVE_PAYOUT_STATUSES = ["pending", "approved"];
+const PAYOUT_STATUSES = ["requested", "pending", "approved", "processing", "rejected", "paid"];
+const ACTIVE_PAYOUT_STATUSES = ["requested", "pending", "approved", "processing"];
+const VALID_TRANSFER_METHODS = ["upi", "bank", "other"];
+const TRANSACTION_ID_PATTERN = /^[A-Za-z0-9_-]{8,64}$/;
 
 const adminOnly = [authMiddleware, adminMiddleware];
 
@@ -170,7 +175,7 @@ router.get("/payments", adminOnly, async (req, res) => {
     const payments = await Booking.find({ paymentStatus: "paid" })
       .populate("client expert", "name email")
       .sort({ createdAt: -1 });
-    res.json(payments);
+    res.json(formatBookingsForResponse(payments));
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -224,6 +229,7 @@ router.get("/payouts", adminOnly, async (req, res) => {
       .populate("expert", "name email profileImage upiId accountHolderName payoutMethod bankDetails")
       .populate("approvedBy", "name email")
       .populate("processedBy", "name email")
+      .populate("paidBy", "name email")
       .sort({ createdAt: -1 });
     res.json(payouts);
   } catch (error) {
@@ -238,6 +244,7 @@ router.get("/payouts/report", adminOnly, async (req, res) => {
       .populate("expert", "name email upiId accountHolderName payoutMethod bankDetails")
       .populate("approvedBy", "name email")
       .populate("processedBy", "name email")
+      .populate("paidBy", "name email")
       .sort({ createdAt: -1 });
 
     const rows = [
@@ -253,10 +260,13 @@ router.get("/payouts/report", adminOnly, async (req, res) => {
         "UPI",
         "Bank Account",
         "IFSC",
+        "Transfer Method",
         "Transaction ID",
+        "Transfer Proof",
         "Approved By",
         "Approved At",
         "Processed By",
+        "Paid By",
         "Admin Note",
         "Paid At",
       ],
@@ -275,10 +285,13 @@ router.get("/payouts/report", adminOnly, async (req, res) => {
           details.upiId || payout.expert?.upiId || "",
           details.bankAccountNumber || payout.expert?.bankDetails?.accountNumber || "",
           details.ifscCode || payout.expert?.bankDetails?.ifsc || "",
+          payout.transferMethod || "",
           payout.transactionId || "",
+          payout.transferProofUrl || "",
           payout.approvedBy?.name || "",
           payout.approvedAt?.toISOString?.() || "",
           payout.processedBy?.name || "",
+          payout.paidBy?.name || "",
           payout.adminNote || "",
           payout.paidAt?.toISOString?.() || "",
         ];
@@ -295,26 +308,61 @@ router.get("/payouts/report", adminOnly, async (req, res) => {
 });
 
 // UPDATE PAYOUT REQUEST STATUS
-router.put("/payouts/:id/status", adminOnly, async (req, res) => {
+router.put("/payouts/:id/status", adminOnly, uploadPayoutProof.single("transferProof"), async (req, res) => {
   try {
-    const { status, transactionId, adminNote } = req.body;
+    const { status, transactionId, adminNote, transferMethod, transferProofUrl, proofUrl } = req.body;
     const cleanTransactionId = String(transactionId || "").trim();
     const cleanAdminNote = String(adminNote || "").trim();
+    const normalizedTransferMethod = String(transferMethod || "").trim().toLowerCase();
+    const uploadedProofUrl = req.file ? `/uploads/payout-proofs/${req.file.filename}` : "";
+    const cleanTransferProofUrl = uploadedProofUrl || String(transferProofUrl || proofUrl || "").trim();
+    const isSuperAdmin = isAdminEmail(req.adminUser?.email);
 
     if (!PAYOUT_STATUSES.includes(status)) {
       return res.status(400).json({ message: "Invalid payout status" });
     }
-    if (status === "paid" && !cleanTransactionId) {
-      return res.status(400).json({ message: "Transaction ID / UTR number is required to mark payout as paid" });
-    }
 
     const payout = await Payout.findById(req.params.id);
     if (!payout) return res.status(404).json({ message: "Payout not found" });
-    if (payout.status === "paid" && status !== "paid") {
-      return res.status(400).json({ message: "Paid payouts cannot be moved back to another status" });
+    const previousStatus = payout.status;
+
+    if (previousStatus === "paid" && !isSuperAdmin) {
+      return res.status(403).json({ message: "Paid payout transfer fields are locked. Only the super admin can edit or reopen." });
     }
-    if (status === "paid" && !ACTIVE_PAYOUT_STATUSES.includes(payout.status)) {
-      return res.status(400).json({ message: "Only pending or approved payouts can be marked paid" });
+    if (status === "approved" && !["requested", "pending"].includes(previousStatus)) {
+      return res.status(400).json({ message: "Only requested payouts can be approved first" });
+    }
+    if (status === "processing" && previousStatus !== "approved") {
+      return res.status(400).json({ message: "Only approved payouts can move to processing" });
+    }
+    if (status === "paid") {
+      if (!["approved", "processing"].includes(previousStatus) && !(isSuperAdmin && previousStatus === "paid")) {
+        return res.status(400).json({ message: "Approve payout before marking it paid" });
+      }
+      if (!VALID_TRANSFER_METHODS.includes(normalizedTransferMethod)) {
+        return res.status(400).json({ message: "Transfer method must be UPI, Bank, or Other" });
+      }
+      if (!TRANSACTION_ID_PATTERN.test(cleanTransactionId)) {
+        return res.status(400).json({
+          message: "Transaction ID must be 8-64 characters and use only letters, numbers, dash, or underscore",
+        });
+      }
+      if (!cleanTransferProofUrl && !payout.transferProofUrl) {
+        return res.status(400).json({ message: "Transfer proof image/PDF upload or proof URL is required before marking paid" });
+      }
+      if (!cleanAdminNote) {
+        return res.status(400).json({ message: "Admin note is required when marking payout paid" });
+      }
+      const duplicate = await Payout.findOne({
+        _id: { $ne: payout._id },
+        transactionId: cleanTransactionId,
+      }).select("_id");
+      if (duplicate) {
+        return res.status(409).json({ message: "This transaction ID is already used on another payout" });
+      }
+    }
+    if (status === "rejected" && previousStatus === "paid" && !isSuperAdmin) {
+      return res.status(403).json({ message: "Only the super admin can reopen a paid payout" });
     }
 
     payout.status = status;
@@ -324,24 +372,77 @@ router.put("/payouts/:id/status", adminOnly, async (req, res) => {
 
     if (status === "approved") {
       payout.approvedBy = req.user.id;
-      payout.approvedAt = payout.approvedAt || new Date();
+      payout.approvedAt = new Date();
       payout.transactionId = "";
+      payout.transferMethod = "";
+      payout.transferProofUrl = "";
+      payout.proofFileName = "";
+      payout.proofMimeType = "";
+      payout.paidBy = null;
       payout.paidAt = null;
+      payout.paidFieldsLocked = false;
+      await PayoutAuditLog.create({
+        admin: req.user.id,
+        payout: payout._id,
+        amount: payout.amount || payout.netAmount || 0,
+        transactionId: "",
+        action: "payout_approved",
+        timestamp: new Date(),
+      });
+    } else if (status === "processing") {
+      payout.approvedBy = payout.approvedBy || req.user.id;
+      payout.approvedAt = payout.approvedAt || new Date();
     } else if (status === "paid") {
       payout.approvedBy = payout.approvedBy || req.user.id;
       payout.approvedAt = payout.approvedAt || new Date();
       payout.transactionId = cleanTransactionId;
+      payout.transferMethod = normalizedTransferMethod;
+      payout.transferProofUrl = cleanTransferProofUrl || payout.transferProofUrl;
+      payout.proofFileName = req.file?.originalname || payout.proofFileName || "";
+      payout.proofMimeType = req.file?.mimetype || payout.proofMimeType || "";
+      payout.paidBy = req.user.id;
       payout.paidAt = new Date();
+      payout.paidFieldsLocked = true;
+      await PayoutAuditLog.create({
+        admin: req.user.id,
+        payout: payout._id,
+        amount: payout.amount || payout.netAmount || 0,
+        transactionId: cleanTransactionId,
+        action: previousStatus === "paid" ? "payout_paid_edited" : "payout_marked_paid",
+        timestamp: new Date(),
+      });
     } else if (status === "rejected") {
       payout.approvedBy = null;
       payout.approvedAt = null;
+      if (previousStatus === "paid" && isSuperAdmin) {
+        await PayoutAuditLog.create({
+          admin: req.user.id,
+          payout: payout._id,
+          amount: payout.amount || payout.netAmount || 0,
+          transactionId: payout.transactionId || "",
+          action: "payout_reopened",
+          timestamp: new Date(),
+        });
+      }
       payout.transactionId = "";
+      payout.transferMethod = "";
+      payout.transferProofUrl = "";
+      payout.proofFileName = "";
+      payout.proofMimeType = "";
+      payout.paidBy = null;
       payout.paidAt = null;
-    } else if (status === "pending") {
+      payout.paidFieldsLocked = false;
+    } else if (status === "requested" || status === "pending") {
       payout.approvedBy = null;
       payout.approvedAt = null;
       payout.transactionId = "";
+      payout.transferMethod = "";
+      payout.transferProofUrl = "";
+      payout.proofFileName = "";
+      payout.proofMimeType = "";
+      payout.paidBy = null;
       payout.paidAt = null;
+      payout.paidFieldsLocked = false;
     }
 
     await payout.save();
@@ -350,6 +451,8 @@ router.put("/payouts/:id/status", adminOnly, async (req, res) => {
       ? "paid"
       : status === "rejected"
         ? "pending"
+        : status === "processing"
+          ? "processing"
         : status === "approved"
           ? "approved"
           : "requested";
@@ -362,7 +465,8 @@ router.put("/payouts/:id/status", adminOnly, async (req, res) => {
     const updatedPayout = await Payout.findById(payout._id)
       .populate("expert", "name email profileImage upiId accountHolderName payoutMethod bankDetails")
       .populate("approvedBy", "name email")
-      .populate("processedBy", "name email");
+      .populate("processedBy", "name email")
+      .populate("paidBy", "name email");
 
     res.json({ message: `Payout marked ${status}`, payout: updatedPayout });
   } catch (error) {
@@ -375,8 +479,8 @@ router.get("/bookings", adminOnly, async (req, res) => {
   try {
     const bookings = await Booking.find()
       .populate("client expert", bookingPopulateFields)
-      .sort({ date: -1, createdAt: -1 });
-    res.json(bookings);
+      .sort({ startAt: -1, slotStart: -1, createdAt: -1 });
+    res.json(formatBookingsForResponse(bookings));
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -412,7 +516,7 @@ router.put("/booking/:id/status", adminOnly, async (req, res) => {
     const updatedBooking = await Booking.findById(booking._id)
       .populate("client expert", bookingPopulateFields);
 
-    res.json({ message: "Booking updated successfully", booking: updatedBooking });
+    res.json({ message: "Booking updated successfully", booking: formatBookingForResponse(updatedBooking) });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -457,7 +561,7 @@ router.get("/violations", adminOnly, async (req, res) => {
   try {
     const violations = await ViolationLog.find()
       .populate("userId", "name email role profilePhotoUrl profileImage profilePhoto avatar photoUrl googlePhoto")
-      .populate("bookingId", "meetingLink slotStart slotEnd status paymentStatus")
+      .populate("bookingId", "meetingLink videoCallUrl startAt endAt timezone slotStart slotEnd status paymentStatus")
       .populate("targetUserId", "name email role profilePhotoUrl profileImage profilePhoto avatar photoUrl googlePhoto isBlocked blockedUsers blockedBy")
       .sort({ timestamp: -1 });
 
@@ -607,7 +711,7 @@ router.get("/analytics", adminOnly, async (req, res) => {
         bookingStatusCounts: toCountMap(bookingStatusRows),
         paymentStatusCounts: toCountMap(paymentStatusRows),
       },
-      latestBookings,
+      latestBookings: formatBookingsForResponse(latestBookings),
     });
   } catch (error) {
     res.status(500).json({ message: error.message });

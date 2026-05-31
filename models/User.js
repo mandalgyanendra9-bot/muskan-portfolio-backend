@@ -83,7 +83,7 @@ const userSchema = new mongoose.Schema({
     ],
   },
 
-  timezone: { type: String, default: "UTC" },
+  timezone: { type: String, default: "Asia/Kolkata" },
   slotDuration: { type: Number, default: 30 }, // minutes
 
   // ─── Social / Portfolio Links ──────────────────────────
@@ -136,7 +136,7 @@ const userSchema = new mongoose.Schema({
   kycDocumentUrl: { type: String, default: "" },
   payoutPreference: { type: String, enum: ["manual","auto"], default: "manual" },
   pendingPayoutAmount: { type: Number, default: 0 },
-  payoutStatus: { type: String, enum: ["pending","approved","paid","rejected"], default: "pending" },
+  payoutStatus: { type: String, enum: ["requested","pending","approved","processing","paid","rejected"], default: "pending" },
   isKycVerified: { type: Boolean, default: false },
 });
 

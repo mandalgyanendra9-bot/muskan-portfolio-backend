@@ -7,6 +7,7 @@ const User = require("../models/User");
 const Booking = require("../models/Booking");
 const authMiddleware = require("../middleware/authMiddleware");
 const { applyBookingEarnings, creditExpertWalletForBooking } = require("../utils/earnings");
+const { ensureBookingVideoCallUrl, getCanonicalBookingTimes, formatBookingForResponse } = require("../utils/bookingTime");
 
 const getRazorpayKeyId = () => String(process.env.RAZORPAY_KEY_ID || "").trim();
 const getRazorpayKeySecret = () => String(process.env.RAZORPAY_KEY_SECRET || "").trim();
@@ -214,6 +215,7 @@ router.post("/verify", authMiddleware, async (req, res) => {
     await transaction.save();
 
     const user = await User.findById(req.user.id);
+    let verifiedBooking = null;
 
     if (transaction.type === "wallet_topup") {
       user.walletBalance += transaction.amount;
@@ -228,19 +230,28 @@ router.post("/verify", authMiddleware, async (req, res) => {
       const booking = await Booking.findById(transaction.bookingId);
       if (booking) {
         verifyLogContext.expertId = booking.expert?.toString?.() || null;
-        booking.status = booking.status === "pending" ? "confirmed" : booking.status;
-        booking.bookingStatus = booking.status;
+        booking.status = "confirmed";
+        booking.bookingStatus = "confirmed";
         booking.paymentStatus = "paid";
         booking.paymentId = razorpay_payment_id;
+        const canonicalTimes = getCanonicalBookingTimes(booking);
+        if (canonicalTimes.startAt && canonicalTimes.endAt) {
+          booking.startAt = canonicalTimes.startAt;
+          booking.endAt = canonicalTimes.endAt;
+          booking.timezone = canonicalTimes.timezone;
+        }
+        ensureBookingVideoCallUrl(booking);
         await applyBookingEarnings(booking, transaction.amount);
         await creditExpertWalletForBooking(booking);
         await booking.save();
+        verifiedBooking = formatBookingForResponse(booking);
       }
     }
 
     res.json({
       message: "Payment verified successfully",
       user,
+      booking: verifiedBooking,
       keyId: getRazorpayKeyId(),
       keyMode: getRazorpayMode(getRazorpayKeyId()),
     });

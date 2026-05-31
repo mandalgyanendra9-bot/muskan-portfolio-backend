@@ -5,6 +5,9 @@ const bookingSchema = new mongoose.Schema({
   clientId: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
   expert: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
   expertId: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+  startAt: { type: Date, default: null },
+  endAt: { type: Date, default: null },
+  timezone: { type: String, default: "Asia/Kolkata" },
   date: { type: String, default: "" },
   startTime: { type: String, default: "" },
   endTime: { type: String, default: "" },
@@ -23,7 +26,7 @@ const bookingSchema = new mongoose.Schema({
   expertWalletCreditedAt: { type: Date, default: null },
   payoutStatus: {
     type: String,
-    enum: ["not_requested", "pending", "requested", "approved", "paid", "rejected"],
+    enum: ["not_requested", "pending", "requested", "approved", "processing", "paid", "rejected"],
     default: "not_requested",
   },
   orderId: { type: String, default: "" },
@@ -46,9 +49,13 @@ const bookingSchema = new mongoose.Schema({
   },
   paymentId: { type: String },
   meetingLink: { type: String, default: "" },
+  videoCallUrl: { type: String, default: "" },
   ratingGiven: { type: Boolean, default: false },
   notes: { type: String },
   createdAt: { type: Date, default: Date.now }
 });
+
+bookingSchema.index({ expert: 1, startAt: 1, endAt: 1 });
+bookingSchema.index({ client: 1, startAt: 1 });
 
 module.exports = mongoose.model("Booking", bookingSchema);

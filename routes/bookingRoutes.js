@@ -10,9 +10,16 @@ const ChatRoom = require('../models/ChatRoom');
 const { hasAdminAccess } = require("../utils/adminAccess");
 const { applyBookingEarnings, creditExpertWalletForBooking } = require("../utils/earnings");
 const { getAvailabilityWindowForDate, getExpertTimezone, parseTimeOnDate } = require("../utils/slotGenerator");
+const {
+  applyCanonicalBookingTimes,
+  ensureBookingVideoCallUrl,
+  formatBookingForResponse,
+  formatBookingsForResponse,
+  getCanonicalBookingTimes,
+  normalizeBookingTimezone,
+} = require("../utils/bookingTime");
 
-const CALL_JOIN_EARLY_MINUTES = 30;
-const CALL_GRACE_AFTER_END_MINUTES = 5;
+const CALL_JOIN_EARLY_MINUTES = 5;
 
 const bookingPopulateFields = "name email profilePhotoUrl profileImage profilePhoto avatar photoUrl googlePhoto title rating reviewsCount role";
 
@@ -22,26 +29,27 @@ const getBookingRoomId = (booking) => {
 
 const getCallAccess = (booking) => {
   const now = Date.now();
-  const startsAt = new Date(booking.slotStart).getTime();
-  const endsAt = new Date(booking.slotEnd).getTime();
+  const { startAt, endAt, timezone } = getCanonicalBookingTimes(booking);
+  const startsAt = startAt ? startAt.getTime() : 0;
+  const endsAt = endAt ? endAt.getTime() : 0;
   const joinOpensAt = startsAt - CALL_JOIN_EARLY_MINUTES * 60 * 1000;
-  const graceEndsAt = endsAt + CALL_GRACE_AFTER_END_MINUTES * 60 * 1000;
   const isConfirmedPaid = booking.status === "confirmed" && booking.paymentStatus === "paid";
 
   return {
     roomId: getBookingRoomId(booking),
-    startsAt: booking.slotStart,
-    endsAt: booking.slotEnd,
+    startsAt: startAt,
+    endsAt: endAt,
+    timezone,
     joinOpensAt: new Date(joinOpensAt),
-    graceEndsAt: new Date(graceEndsAt),
+    graceEndsAt: endAt,
     remainingMs: Math.max(0, endsAt - now),
-    canJoin: isConfirmedPaid && now >= joinOpensAt && now <= graceEndsAt,
+    canJoin: isConfirmedPaid && startsAt > 0 && endsAt > 0 && now >= joinOpensAt && now <= endsAt,
     isEarly: isConfirmedPaid && now < joinOpensAt,
-    isExpired: now > graceEndsAt || booking.status === "completed",
+    isExpired: endsAt > 0 && (now > endsAt || booking.status === "completed"),
   };
 };
 
-const canAccessBooking = async (booking, userId) => {
+const canAccessBooking = async (booking, userId, options = {}) => {
   const clientObjectId = booking.clientId || booking.client;
   const expertObjectId = booking.expertId || booking.expert;
   const clientId = clientObjectId?.toString?.();
@@ -64,6 +72,7 @@ const canAccessBooking = async (booking, userId) => {
 
     return true;
   }
+  if (!options.allowAdmin) return false;
   const user = await User.findById(userId).select("email role");
   return hasAdminAccess(user);
 };
@@ -123,12 +132,29 @@ const getClientSubmittedAmount = (body = {}) => {
 };
 
 const getBookingSelection = (body = {}, expert = {}) => {
-  const timezone = getExpertTimezone(expert);
+  const timezone = normalizeBookingTimezone(body.timezone || getExpertTimezone(expert));
   let start;
   let end;
   let durationMinutes = normalizeDurationMinutes(body.durationMinutes ?? body.duration);
 
-  if (body.date && body.startTime) {
+  if (body.startAt) {
+    start = moment(body.startAt).tz(timezone);
+    if (!start.isValid()) {
+      return { error: "Valid booking slot is required" };
+    }
+    if (body.endAt) {
+      end = moment(body.endAt).tz(timezone);
+      if (!end.isValid() || !end.isAfter(start)) {
+        return { error: "Valid booking slot is required" };
+      }
+      durationMinutes = normalizeDurationMinutes(Math.round(end.diff(start, "minutes", true)));
+    } else {
+      if (!durationMinutes) {
+        return { error: "Invalid duration selected." };
+      }
+      end = start.clone().add(durationMinutes, "minutes");
+    }
+  } else if (body.date && body.startTime) {
     const rawDate = String(body.date || "").trim();
     const dateOnly = rawDate.includes("T")
       ? moment(rawDate).tz(timezone).format("YYYY-MM-DD")
@@ -299,6 +325,9 @@ router.post("/create-order", authMiddleware, async (req, res) => {
       clientId: req.user.id,
       expert: expertId,
       expertId,
+      startAt: bookingSelection.start.toDate(),
+      endAt: bookingSelection.end.toDate(),
+      timezone: bookingSelection.timezone,
       date: bookingSelection.date,
       startTime: bookingSelection.startTime,
       endTime: bookingSelection.endTime,
@@ -311,7 +340,8 @@ router.post("/create-order", authMiddleware, async (req, res) => {
       totalAmount: numericTotalPrice,
       notes,
       isPriority: client?.subscriptionPlan === "premium",
-      meetingLink: `/video-call/${bookingSelection.start.valueOf()}_${Math.random().toString(36).substring(2, 9)}`
+      meetingLink: "",
+      videoCallUrl: "",
     });
 
     const orderAmount = Math.round(numericTotalPrice * 100);
@@ -367,11 +397,11 @@ router.post("/create-order", authMiddleware, async (req, res) => {
     booking.orderId = order.id;
     booking.paymentStatus = "unpaid";
     booking.bookingStatus = booking.status;
-    booking.meetingLink = `/video-call/${booking._id}`;
+    ensureBookingVideoCallUrl(booking);
     await booking.save();
 
     res.status(201).json({
-      booking,
+      booking: formatBookingForResponse(booking),
       orderId: order.id,
       amount: order.amount,
       totalAmount: numericTotalPrice,
@@ -440,7 +470,7 @@ router.post("/verify-payment", authMiddleware, async (req, res) => {
 
     if (bookingDoc.paymentStatus === "paid" && bookingDoc.paymentId === razorpay_payment_id) {
       const booking = await populateBooking(Booking.findById(bookingDoc._id));
-      return res.json({ message: "Payment already verified", booking });
+      return res.json({ message: "Payment already verified", booking: formatBookingForResponse(booking) });
     }
 
     if (bookingDoc.orderId && bookingDoc.orderId !== razorpay_order_id) {
@@ -462,6 +492,13 @@ router.post("/verify-payment", authMiddleware, async (req, res) => {
       bookingDoc.paymentId = razorpay_payment_id;
       bookingDoc.paymentFailureReason = "";
       bookingDoc.orderId = bookingDoc.orderId || razorpay_order_id;
+      const canonicalTimes = getCanonicalBookingTimes(bookingDoc);
+      if (canonicalTimes.startAt && canonicalTimes.endAt) {
+        bookingDoc.startAt = canonicalTimes.startAt;
+        bookingDoc.endAt = canonicalTimes.endAt;
+        bookingDoc.timezone = canonicalTimes.timezone;
+      }
+      ensureBookingVideoCallUrl(bookingDoc);
       await applyBookingEarnings(bookingDoc);
       await creditExpertWalletForBooking(bookingDoc);
       await bookingDoc.save();
@@ -474,7 +511,7 @@ router.post("/verify-payment", authMiddleware, async (req, res) => {
         { upsert: true, new: true }
       );
       
-      res.json({ message: "Payment Verified Successfully", booking });
+      res.json({ message: "Payment Verified Successfully", booking: formatBookingForResponse(booking) });
     } else {
       res.status(400).json({ message: "Invalid Signature" });
     }
@@ -501,7 +538,7 @@ router.post("/payment-status", authMiddleware, async (req, res) => {
     if (!booking) return res.status(404).json({ message: "Booking not found" });
     if (booking.paymentStatus === "paid") {
       const populated = await populateBooking(Booking.findById(booking._id));
-      return res.json({ message: "Booking already paid", booking: populated });
+      return res.json({ message: "Booking already paid", booking: formatBookingForResponse(populated) });
     }
 
     if (booking.orderId && razorpay_order_id && booking.orderId !== razorpay_order_id) {
@@ -512,7 +549,7 @@ router.post("/payment-status", authMiddleware, async (req, res) => {
     const populated = await populateBooking(Booking.findById(updated._id));
     res.json({
       message: `Payment marked ${normalizedStatus}`,
-      booking: populated,
+      booking: formatBookingForResponse(populated),
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -529,9 +566,12 @@ router.get("/room/:roomId", authMiddleware, async (req, res) => {
 
     const hasAccess = await canAccessBooking(bookingDoc, req.user.id);
     if (!hasAccess) return res.status(403).json({ message: "You are not authorized for this meeting" });
+    if (bookingDoc.status !== "confirmed" || bookingDoc.paymentStatus !== "paid") {
+      return res.status(403).json({ message: "This meeting is available only after confirmed payment" });
+    }
 
     const booking = await populateBooking(Booking.findById(bookingDoc._id));
-    res.json({ booking, callAccess: getCallAccess(bookingDoc) });
+    res.json({ booking: formatBookingForResponse(booking), callAccess: getCallAccess(bookingDoc) });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -547,8 +587,12 @@ router.put("/room/:roomId/complete", authMiddleware, async (req, res) => {
 
     const hasAccess = await canAccessBooking(booking, req.user.id);
     if (!hasAccess) return res.status(403).json({ message: "You are not authorized for this meeting" });
+    if (booking.status !== "confirmed" || booking.paymentStatus !== "paid") {
+      return res.status(403).json({ message: "Only confirmed paid bookings can be completed from the meeting room" });
+    }
 
-    const endsAt = new Date(booking.slotEnd).getTime();
+    const { endAt } = getCanonicalBookingTimes(booking);
+    const endsAt = endAt ? endAt.getTime() : 0;
     if (Date.now() < endsAt) {
       return res.status(400).json({ message: "This call is still inside the booked time" });
     }
@@ -562,7 +606,7 @@ router.put("/room/:roomId/complete", authMiddleware, async (req, res) => {
     const updatedBooking = await populateBooking(Booking.findById(booking._id));
     res.json({
       message: "Booked call time ended. Booking marked completed.",
-      booking: updatedBooking,
+      booking: formatBookingForResponse(updatedBooking),
       callAccess: getCallAccess(updatedBooking),
     });
   } catch (error) {
@@ -580,15 +624,34 @@ router.get("/my-bookings", authMiddleware, async (req, res) => {
 
     const bookings = await Booking.find(query)
       .populate("client expert", bookingPopulateFields)
-      .sort({ isPriority: -1, slotStart: 1 });
+      .sort({ isPriority: -1, startAt: 1, slotStart: 1 });
 
-    res.json(bookings);
+    res.json(formatBookingsForResponse(bookings));
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
 });
 
-// 4. UPDATE BOOKING STATUS (Accept/Reject/Complete/Cancel)
+// 4. GET BOOKING DETAILS
+router.get("/:id", authMiddleware, async (req, res) => {
+  try {
+    const bookingDoc = await Booking.findById(req.params.id);
+    if (!bookingDoc) return res.status(404).json({ message: "Booking not found" });
+
+    const hasAccess = await canAccessBooking(bookingDoc, req.user.id);
+    if (!hasAccess) return res.status(403).json({ message: "You are not authorized to view this booking" });
+
+    const booking = await populateBooking(Booking.findById(bookingDoc._id));
+    res.json({
+      booking: formatBookingForResponse(booking),
+      callAccess: getCallAccess(bookingDoc),
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// 5. UPDATE BOOKING STATUS (Accept/Reject/Complete/Cancel)
 router.put("/:id/status", authMiddleware, async (req, res) => {
   try {
     const { status } = req.body;
@@ -622,7 +685,7 @@ router.put("/:id/status", authMiddleware, async (req, res) => {
     
     const updatedBooking = await populateBooking(Booking.findById(booking._id));
       
-    res.json(updatedBooking);
+    res.json(formatBookingForResponse(updatedBooking));
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

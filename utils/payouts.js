@@ -3,7 +3,7 @@ const Booking = require("../models/Booking");
 const Payout = require("../models/Payout");
 const { getBookingEarnings, getCommissionPercent, roundMoney } = require("./earnings");
 
-const ACTIVE_PAYOUT_STATUSES = ["pending", "approved"];
+const ACTIVE_PAYOUT_STATUSES = ["requested", "pending", "approved", "processing"];
 
 const toObjectId = (id) => {
   if (id instanceof mongoose.Types.ObjectId) return id;
@@ -60,7 +60,7 @@ const getPayoutWallet = async (expertId) => {
       acc.availableBalance += earnings.expertEarning;
       acc.availablePlatformCommission += earnings.platformCommission;
       acc.availableBookingIds.push(booking._id);
-    } else if (booking.payoutStatus === "requested" || booking.payoutStatus === "approved") {
+    } else if (booking.payoutStatus === "requested" || booking.payoutStatus === "approved" || booking.payoutStatus === "processing") {
       acc.pendingEarnings += earnings.expertEarning;
     } else if (booking.payoutStatus === "paid") {
       acc.paidOutFromBookings += earnings.expertEarning;
