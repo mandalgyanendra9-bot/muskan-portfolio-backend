@@ -54,10 +54,29 @@ if (getRazorpayKeyId() && getRazorpayKeySecret()) {
 router.post("/create-order", authMiddleware, async (req, res) => {
   try {
     const { amount, type, description, bookingId } = req.body;
-    const numericAmount = Number(amount);
+    let numericAmount = Number(amount);
 
     if (!numericAmount || numericAmount <= 0 || !type) {
       return res.status(400).json({ message: "Valid amount and type are required" });
+    }
+    if (type === "booking_payment") {
+      if (!bookingId) {
+        return res.status(400).json({ message: "Booking id is required for booking payment" });
+      }
+      const booking = await Booking.findById(bookingId).select("client clientId totalAmount totalPrice paymentStatus");
+      if (!booking) {
+        return res.status(404).json({ message: "Booking not found" });
+      }
+      if (String(booking.clientId || booking.client) !== String(req.user.id)) {
+        return res.status(403).json({ message: "You are not authorized to pay for this booking" });
+      }
+      if (booking.paymentStatus === "paid") {
+        return res.status(400).json({ message: "Booking is already paid" });
+      }
+      numericAmount = Number(booking.totalAmount || booking.totalPrice || 0);
+      if (!numericAmount || numericAmount <= 0) {
+        return res.status(400).json({ message: "Booking amount is not configured" });
+      }
     }
     if (!razorpay) {
       console.error("[Razorpay Payment Config Missing]", {

@@ -28,6 +28,8 @@ const payoutSchema = new mongoose.Schema({
   },
   transactionId: { type: String, default: "" },
   adminNote: { type: String, default: "" },
+  approvedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+  approvedAt: { type: Date, default: null },
   processedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
   processedAt: { type: Date, default: null },
   paidAt: { type: Date, default: null },

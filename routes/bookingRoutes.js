@@ -267,7 +267,7 @@ router.post("/create-order", authMiddleware, async (req, res) => {
     }
 
     const bookingConflict = await Booking.exists({
-      expert: expertId,
+      $or: [{ expert: expertId }, { expertId }],
       status: { $ne: "cancelled" },
       paymentStatus: { $nin: ["failed", "cancelled", "refunded"] },
       slotStart: { $lt: bookingSelection.end.toDate() },

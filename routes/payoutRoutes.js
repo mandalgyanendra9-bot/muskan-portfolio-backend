@@ -15,6 +15,7 @@ const {
 
 const adminOnly = [authMiddleware, adminMiddleware];
 const VALID_PAYOUT_METHODS = ["upi", "bank"];
+const ACTIVE_PAYOUT_STATUSES = ["pending", "approved"];
 
 const requireExpert = async (req, res) => {
   const expert = await User.findById(req.user.id);
@@ -61,7 +62,7 @@ const validatePayoutSettings = (settings) => {
 const getPayoutPayload = async (expert) => {
   const [wallet, requests] = await Promise.all([
     getPayoutWallet(expert._id),
-    Payout.find({ expert: expert._id }).sort({ createdAt: -1 }).limit(10),
+    Payout.find({ expert: expert._id }).sort({ createdAt: -1 }),
   ]);
 
   const settings = getPayoutSettings(expert);
@@ -165,8 +166,8 @@ router.post("/request", authMiddleware, async (req, res) => {
 
 router.get("/pending", adminOnly, async (req, res) => {
   try {
-    const pending = await Payout.find({ status: "pending" })
-      .populate("expert", "name email upiId accountHolderName payoutMethod bankDetails")
+    const pending = await Payout.find({ status: { $in: ACTIVE_PAYOUT_STATUSES } })
+      .populate("expert", "name email profileImage upiId accountHolderName payoutMethod bankDetails")
       .sort({ createdAt: -1 });
     res.json(pending);
   } catch (error) {
@@ -176,14 +177,20 @@ router.get("/pending", adminOnly, async (req, res) => {
 
 router.put("/:id/approve", adminOnly, async (req, res) => {
   try {
+    const transactionId = String(req.body.transactionId || req.body.transactionReference || "").trim();
     const payout = await Payout.findById(req.params.id);
     if (!payout) return res.status(404).json({ message: "Payout not found" });
-    if (payout.status !== "pending" && payout.status !== "approved") {
+    if (!ACTIVE_PAYOUT_STATUSES.includes(payout.status)) {
       return res.status(400).json({ message: "Payout is not awaiting payment" });
+    }
+    if (!transactionId) {
+      return res.status(400).json({ message: "Transaction ID / UTR number is required to mark payout as paid" });
     }
 
     payout.status = "paid";
-    payout.transactionId = req.body.transactionId || req.body.transactionReference || "";
+    payout.approvedBy = payout.approvedBy || req.user.id;
+    payout.approvedAt = payout.approvedAt || new Date();
+    payout.transactionId = transactionId;
     payout.processedBy = req.user.id;
     payout.processedAt = new Date();
     payout.paidAt = new Date();

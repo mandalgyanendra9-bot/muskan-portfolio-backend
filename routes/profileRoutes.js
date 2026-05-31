@@ -23,6 +23,13 @@ const normalizeClockTime = (value) => {
   return `${String(hour).padStart(2, "0")}:${amPmMatch[2]}`;
 };
 
+const minutesFromClock = (value) => {
+  const normalized = normalizeClockTime(value);
+  const match = String(normalized || "").match(/^([01]\d|2[0-3]):([0-5]\d)$/);
+  if (!match) return null;
+  return Number(match[1]) * 60 + Number(match[2]);
+};
+
 const normalizeAvailabilitySchedule = (schedule = []) =>
   (Array.isArray(schedule) ? schedule : []).map((day) => ({
     ...day,
@@ -30,6 +37,22 @@ const normalizeAvailabilitySchedule = (schedule = []) =>
     to: normalizeClockTime(day.to),
     available: Boolean(day.available),
   }));
+
+const validateAvailabilitySchedule = (schedule = []) => {
+  if (!Array.isArray(schedule)) return "Availability schedule must be a list";
+  for (const day of schedule) {
+    if (!day?.available) continue;
+    const fromMinutes = minutesFromClock(day.from);
+    const toMinutes = minutesFromClock(day.to);
+    if (fromMinutes === null || toMinutes === null) {
+      return `${day.day || "Selected day"} availability must use a valid time`;
+    }
+    if (toMinutes <= fromMinutes) {
+      return `${day.day || "Selected day"} availability end time must be after start time`;
+    }
+  }
+  return null;
+};
 
 // ─── GET ALL EXPERTS (public) ─────────────────────────────────────────────────
 router.get("/experts", async (req, res) => {
@@ -107,6 +130,9 @@ try {
     if (hourlyRate !== undefined) updateData.hourlyRate = Number(hourlyRate);
     const minuteRate = perMinuteRate !== undefined ? Number(perMinuteRate) : pricePerMinute !== undefined ? Number(pricePerMinute) : undefined;
     if (minuteRate !== undefined) {
+      if (!Number.isFinite(minuteRate) || minuteRate < 0) {
+        return res.status(400).json({ message: "Per-minute rate must be a valid positive amount" });
+      }
       updateData.perMinuteRate = minuteRate;
       updateData.pricePerMinute = minuteRate;
     }
@@ -128,6 +154,8 @@ try {
         updateData.availabilitySchedule = typeof availabilitySchedule === "string"
           ? JSON.parse(availabilitySchedule)
           : availabilitySchedule;
+        const validationMessage = validateAvailabilitySchedule(updateData.availabilitySchedule);
+        if (validationMessage) return res.status(400).json({ message: validationMessage });
         updateData.availabilitySchedule = normalizeAvailabilitySchedule(updateData.availabilitySchedule);
       } catch { /* ignore parse errors */ }
     }

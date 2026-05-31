@@ -21,6 +21,7 @@ const {
 const BOOKING_STATUSES = ["pending", "confirmed", "completed", "cancelled"];
 const PAYMENT_STATUSES = ["unpaid", "paid", "refunded", "failed", "cancelled"];
 const PAYOUT_STATUSES = ["pending", "approved", "rejected", "paid"];
+const ACTIVE_PAYOUT_STATUSES = ["pending", "approved"];
 
 const adminOnly = [authMiddleware, adminMiddleware];
 
@@ -221,6 +222,7 @@ router.get("/payouts", adminOnly, async (req, res) => {
   try {
     const payouts = await Payout.find()
       .populate("expert", "name email profileImage upiId accountHolderName payoutMethod bankDetails")
+      .populate("approvedBy", "name email")
       .populate("processedBy", "name email")
       .sort({ createdAt: -1 });
     res.json(payouts);
@@ -234,6 +236,7 @@ router.get("/payouts/report", adminOnly, async (req, res) => {
   try {
     const payouts = await Payout.find()
       .populate("expert", "name email upiId accountHolderName payoutMethod bankDetails")
+      .populate("approvedBy", "name email")
       .populate("processedBy", "name email")
       .sort({ createdAt: -1 });
 
@@ -251,7 +254,10 @@ router.get("/payouts/report", adminOnly, async (req, res) => {
         "Bank Account",
         "IFSC",
         "Transaction ID",
+        "Approved By",
+        "Approved At",
         "Processed By",
+        "Admin Note",
         "Paid At",
       ],
       ...payouts.map((payout) => {
@@ -270,7 +276,10 @@ router.get("/payouts/report", adminOnly, async (req, res) => {
           details.bankAccountNumber || payout.expert?.bankDetails?.accountNumber || "",
           details.ifscCode || payout.expert?.bankDetails?.ifsc || "",
           payout.transactionId || "",
+          payout.approvedBy?.name || "",
+          payout.approvedAt?.toISOString?.() || "",
           payout.processedBy?.name || "",
+          payout.adminNote || "",
           payout.paidAt?.toISOString?.() || "",
         ];
       }),
@@ -289,23 +298,49 @@ router.get("/payouts/report", adminOnly, async (req, res) => {
 router.put("/payouts/:id/status", adminOnly, async (req, res) => {
   try {
     const { status, transactionId, adminNote } = req.body;
+    const cleanTransactionId = String(transactionId || "").trim();
+    const cleanAdminNote = String(adminNote || "").trim();
 
     if (!PAYOUT_STATUSES.includes(status)) {
       return res.status(400).json({ message: "Invalid payout status" });
     }
+    if (status === "paid" && !cleanTransactionId) {
+      return res.status(400).json({ message: "Transaction ID / UTR number is required to mark payout as paid" });
+    }
 
     const payout = await Payout.findById(req.params.id);
     if (!payout) return res.status(404).json({ message: "Payout not found" });
+    if (payout.status === "paid" && status !== "paid") {
+      return res.status(400).json({ message: "Paid payouts cannot be moved back to another status" });
+    }
+    if (status === "paid" && !ACTIVE_PAYOUT_STATUSES.includes(payout.status)) {
+      return res.status(400).json({ message: "Only pending or approved payouts can be marked paid" });
+    }
 
     payout.status = status;
-    payout.adminNote = adminNote || payout.adminNote || "";
+    payout.adminNote = cleanAdminNote || payout.adminNote || "";
     payout.processedBy = req.user.id;
     payout.processedAt = new Date();
 
-    if (status === "paid") {
-      payout.transactionId = transactionId || payout.transactionId || "";
+    if (status === "approved") {
+      payout.approvedBy = req.user.id;
+      payout.approvedAt = payout.approvedAt || new Date();
+      payout.transactionId = "";
+      payout.paidAt = null;
+    } else if (status === "paid") {
+      payout.approvedBy = payout.approvedBy || req.user.id;
+      payout.approvedAt = payout.approvedAt || new Date();
+      payout.transactionId = cleanTransactionId;
       payout.paidAt = new Date();
-    } else if (status !== "paid") {
+    } else if (status === "rejected") {
+      payout.approvedBy = null;
+      payout.approvedAt = null;
+      payout.transactionId = "";
+      payout.paidAt = null;
+    } else if (status === "pending") {
+      payout.approvedBy = null;
+      payout.approvedAt = null;
+      payout.transactionId = "";
       payout.paidAt = null;
     }
 
@@ -326,6 +361,7 @@ router.put("/payouts/:id/status", adminOnly, async (req, res) => {
 
     const updatedPayout = await Payout.findById(payout._id)
       .populate("expert", "name email profileImage upiId accountHolderName payoutMethod bankDetails")
+      .populate("approvedBy", "name email")
       .populate("processedBy", "name email");
 
     res.json({ message: `Payout marked ${status}`, payout: updatedPayout });

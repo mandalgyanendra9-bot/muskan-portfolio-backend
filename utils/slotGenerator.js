@@ -3,10 +3,11 @@ const moment = require('moment-timezone');
 const TIME_FORMATS = ['HH:mm', 'H:mm', 'hh:mm A', 'h:mm A'];
 const DEFAULT_STEP_MINUTES = 5;
 const DEFAULT_DURATION_MINUTES = 30;
+const DEFAULT_TIMEZONE = 'Asia/Kolkata';
 
 const getExpertTimezone = (expert = {}) => {
-  const timezone = expert.timezone || 'UTC';
-  return moment.tz.zone(timezone) ? timezone : 'UTC';
+  const timezone = expert.timezone || DEFAULT_TIMEZONE;
+  return moment.tz.zone(timezone) ? timezone : DEFAULT_TIMEZONE;
 };
 
 const normalizeDurationMinutes = (value, fallback = DEFAULT_DURATION_MINUTES) => {
@@ -84,6 +85,7 @@ function generateSlotsForDate(expert, dateStr, options = {}) {
 
 module.exports = {
   DEFAULT_STEP_MINUTES,
+  DEFAULT_TIMEZONE,
   getAvailabilityWindowForDate,
   getExpertTimezone,
   generateSlotsForDate,
