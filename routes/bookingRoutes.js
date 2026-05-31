@@ -440,16 +440,6 @@ router.post("/verify-payment", authMiddleware, async (req, res) => {
 
     if (bookingDoc.paymentStatus === "paid" && bookingDoc.paymentId === razorpay_payment_id) {
       const booking = await populateBooking(Booking.findById(bookingDoc._id));
-      console.info("[Payment Success Booking Response]", {
-        bookingId: booking._id?.toString?.(),
-        clientId: booking.clientId?.toString?.() || booking.client?._id?.toString?.() || booking.client?.toString?.(),
-        expertId: booking.expertId?.toString?.() || booking.expert?._id?.toString?.() || booking.expert?.toString?.(),
-        paymentStatus: booking.paymentStatus,
-        status: booking.status,
-        startTime: booking.startTime,
-        date: booking.date,
-        duration: booking.durationMinutes || booking.duration,
-      });
       return res.json({ message: "Payment already verified", booking });
     }
 
@@ -483,17 +473,6 @@ router.post("/verify-payment", authMiddleware, async (req, res) => {
         { $setOnInsert: { booking: booking._id, participants: [booking.client, booking.expert] } },
         { upsert: true, new: true }
       );
-
-      console.info("[Payment Success Booking Response]", {
-        bookingId: booking._id?.toString?.(),
-        clientId: booking.clientId?.toString?.() || booking.client?._id?.toString?.() || booking.client?.toString?.(),
-        expertId: booking.expertId?.toString?.() || booking.expert?._id?.toString?.() || booking.expert?.toString?.(),
-        paymentStatus: booking.paymentStatus,
-        status: booking.status,
-        startTime: booking.startTime,
-        date: booking.date,
-        duration: booking.durationMinutes || booking.duration,
-      });
       
       res.json({ message: "Payment Verified Successfully", booking });
     } else {
@@ -602,21 +581,6 @@ router.get("/my-bookings", authMiddleware, async (req, res) => {
     const bookings = await Booking.find(query)
       .populate("client expert", bookingPopulateFields)
       .sort({ isPriority: -1, slotStart: 1 });
-
-    console.info("[My Bookings Fetch]", {
-      userId: userId?.toString?.() || String(userId),
-      role: req.authUser?.role || null,
-      query,
-      count: bookings.length,
-    });
-    bookings.forEach((booking) => {
-      console.info("[Booking Client Compare]", {
-        bookingId: booking._id?.toString?.(),
-        bookingClientId: booking.clientId?.toString?.() || booking.client?._id?.toString?.() || booking.client?.toString?.(),
-        loggedInUserId: userId?.toString?.() || String(userId),
-        matches: String(booking.clientId || booking.client?._id || booking.client) === String(userId),
-      });
-    });
 
     res.json(bookings);
   } catch (error) {
