@@ -70,7 +70,7 @@ const getZegoAppConfig = () => {
 const getZegoRandomInt = () => crypto.randomInt(-2147483648, 2147483647);
 
 const getZegoRandomIv = () => {
-  const possible = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  const possible = "0123456789abcdefghijklmnopqrstuvwxyz";
   let iv = "";
   for (let index = 0; index < 16; index += 1) {
     iv += possible.charAt(crypto.randomInt(0, possible.length));
