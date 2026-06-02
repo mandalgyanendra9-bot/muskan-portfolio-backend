@@ -67,6 +67,20 @@ const getZegoAppConfig = () => {
   return { appID, serverSecret, serverConfigured: true };
 };
 
+const getZegoWebServerConfig = () => {
+  const rawServer = String(process.env.ZEGO_WEB_SERVER_URL || process.env.ZEGO_SERVER || process.env.ZEGO_SERVER_URL || "").trim();
+  const servers = rawServer
+    .split(",")
+    .map((server) => server.trim())
+    .filter((server) => /^(wss?|https?):\/\//i.test(server));
+
+  if (servers.length === 0) return { server: "", configured: false };
+  return {
+    server: servers.length === 1 ? servers[0] : servers,
+    configured: true,
+  };
+};
+
 const getZegoRandomInt = () => crypto.randomInt(-2147483648, 2147483647);
 
 const getZegoRandomIv = () => {
@@ -792,6 +806,7 @@ router.get("/room/:roomId/zego-token", authMiddleware, async (req, res) => {
     }
     const appIdMatchesEnv = zegoConfig.appID === Number(process.env.ZEGO_APP_ID || 0);
     const tokenExpiresAt = new Date(expiresAt * 1000).toISOString();
+    const zegoWebServer = getZegoWebServerConfig();
 
     console.info("[Zego Token Issued]", {
       success: true,
@@ -807,6 +822,7 @@ router.get("/room/:roomId/zego-token", authMiddleware, async (req, res) => {
       tokenExpiresAt,
       tokenExpiresIn: tokenLifetime,
       serverConfigured: zegoConfig.serverConfigured,
+      zegoWebServerConfigured: zegoWebServer.configured,
     });
 
     res.json({
@@ -814,6 +830,8 @@ router.get("/room/:roomId/zego-token", authMiddleware, async (req, res) => {
       appId: zegoConfig.appID,
       appID: zegoConfig.appID,
       serverConfigured: zegoConfig.serverConfigured,
+      zegoWebServerConfigured: zegoWebServer.configured,
+      server: zegoWebServer.server,
       appIdMatchesEnv,
       roomId: callAccess.roomId,
       userId: currentUserId,
