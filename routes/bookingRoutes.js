@@ -55,7 +55,6 @@ const getZegoStreamId = (roomId, userId) => {
 const getZegoAppConfig = () => {
   const appID = Number(process.env.ZEGO_APP_ID || 0);
   const serverSecret = String(process.env.ZEGO_SERVER_SECRET || "").trim();
-  const server = String(process.env.ZEGO_SERVER || process.env.ZEGO_SERVER_URL || "").trim();
 
   if (!Number.isSafeInteger(appID) || appID <= 0) {
     return { error: "Zego app ID is not configured" };
@@ -65,7 +64,18 @@ const getZegoAppConfig = () => {
     return { error: "Zego server secret is not configured" };
   }
 
-  return { appID, server, serverSecret };
+  return { appID, serverSecret, serverConfigured: true };
+};
+
+const getZegoRandomInt = () => crypto.randomInt(-2147483648, 2147483647);
+
+const getZegoRandomIv = () => {
+  const possible = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  let iv = "";
+  for (let index = 0; index < 16; index += 1) {
+    iv += possible.charAt(crypto.randomInt(0, possible.length));
+  }
+  return iv;
 };
 
 const generateZegoToken04 = (appID, userID, serverSecret, effectiveTimeInSeconds, payload) => {
@@ -81,26 +91,27 @@ const generateZegoToken04 = (appID, userID, serverSecret, effectiveTimeInSeconds
   const tokenInfo = {
     app_id: appID,
     user_id: userID,
+    nonce: getZegoRandomInt(),
     ctime: nowSeconds,
     expire: expiresAt,
-    nonce: crypto.randomInt(0, 2147483647),
     payload,
   };
-  const iv = crypto.randomBytes(16);
-  const cipher = crypto.createCipheriv("aes-256-cbc", Buffer.from(serverSecret, "utf8"), iv);
+  const iv = getZegoRandomIv();
+  const ivBuffer = Buffer.from(iv);
+  const cipher = crypto.createCipheriv("aes-256-cbc", serverSecret, iv);
   const encrypted = Buffer.concat([
     cipher.update(JSON.stringify(tokenInfo), "utf8"),
     cipher.final(),
   ]);
-  const binary = Buffer.alloc(8 + 2 + iv.length + 2 + encrypted.length);
+  const binary = Buffer.alloc(8 + 2 + ivBuffer.length + 2 + encrypted.length);
   let offset = 0;
 
   binary.writeBigUInt64BE(BigInt(expiresAt), offset);
   offset += 8;
-  binary.writeUInt16BE(iv.length, offset);
+  binary.writeUInt16BE(ivBuffer.length, offset);
   offset += 2;
-  iv.copy(binary, offset);
-  offset += iv.length;
+  ivBuffer.copy(binary, offset);
+  offset += ivBuffer.length;
   binary.writeUInt16BE(encrypted.length, offset);
   offset += 2;
   encrypted.copy(binary, offset);
@@ -780,26 +791,29 @@ router.get("/room/:roomId/zego-token", authMiddleware, async (req, res) => {
       return res.status(500).json({ message: "Failed to prepare video call access" });
     }
     const appIdMatchesEnv = zegoConfig.appID === Number(process.env.ZEGO_APP_ID || 0);
+    const tokenExpiresAt = new Date(expiresAt * 1000).toISOString();
 
     console.info("[Zego Token Issued]", {
       success: true,
       appId: zegoConfig.appID,
       appIdMatchesEnv,
       roomId: callAccess.roomId,
+      userId: currentUserId,
       currentUserId,
       currentUserRole,
       streamID,
       tokenIssued: true,
-      serverConfigured: Boolean(zegoConfig.server),
-      tokenExpiresAt: new Date(expiresAt * 1000).toISOString(),
+      tokenLength: token.length,
+      tokenExpiresAt,
+      tokenExpiresIn: tokenLifetime,
+      serverConfigured: zegoConfig.serverConfigured,
     });
 
     res.json({
       success: true,
       appId: zegoConfig.appID,
       appID: zegoConfig.appID,
-      server: zegoConfig.server,
-      serverConfigured: Boolean(zegoConfig.server),
+      serverConfigured: zegoConfig.serverConfigured,
       appIdMatchesEnv,
       roomId: callAccess.roomId,
       userId: currentUserId,
@@ -808,7 +822,8 @@ router.get("/room/:roomId/zego-token", authMiddleware, async (req, res) => {
       currentUserRole,
       streamID,
       token,
-      tokenExpiresAt: new Date(expiresAt * 1000).toISOString(),
+      tokenLength: token.length,
+      tokenExpiresAt,
       tokenExpiresIn: tokenLifetime,
     });
   } catch (error) {
