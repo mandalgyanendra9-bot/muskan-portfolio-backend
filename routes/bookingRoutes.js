@@ -770,19 +770,39 @@ router.get("/room/:roomId/zego-token", authMiddleware, async (req, res) => {
       tokenLifetime,
       payload
     );
+    if (!token) {
+      console.error("[Zego Token Error]", {
+        roomId: callAccess.roomId,
+        currentUserId,
+        currentUserRole,
+        reason: "empty token",
+      });
+      return res.status(500).json({ message: "Failed to prepare video call access" });
+    }
+    const appIdMatchesEnv = zegoConfig.appID === Number(process.env.ZEGO_APP_ID || 0);
 
     console.info("[Zego Token Issued]", {
+      success: true,
+      appId: zegoConfig.appID,
+      appIdMatchesEnv,
       roomId: callAccess.roomId,
       currentUserId,
       currentUserRole,
       streamID,
+      tokenIssued: true,
+      serverConfigured: Boolean(zegoConfig.server),
       tokenExpiresAt: new Date(expiresAt * 1000).toISOString(),
     });
 
     res.json({
+      success: true,
+      appId: zegoConfig.appID,
       appID: zegoConfig.appID,
       server: zegoConfig.server,
+      serverConfigured: Boolean(zegoConfig.server),
+      appIdMatchesEnv,
       roomId: callAccess.roomId,
+      userId: currentUserId,
       userID: currentUserId,
       userName: `${currentUserRole}-${currentUserId.slice(-6)}`,
       currentUserRole,
