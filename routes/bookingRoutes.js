@@ -14,7 +14,6 @@ const {
   applyCanonicalBookingTimes,
   ensureBookingVideoCallUrl,
   formatBookingForResponse,
-  formatBookingsForResponse,
   getCanonicalBookingTimes,
   normalizeBookingTimezone,
 } = require("../utils/bookingTime");
@@ -64,10 +63,6 @@ const getZegoAppConfig = () => {
 
   if (serverSecret.length !== 32) {
     return { error: "Zego server secret is not configured" };
-  }
-
-  if (!server) {
-    return { error: "Zego server URL is not configured" };
   }
 
   return { appID, server, serverSecret };
@@ -122,21 +117,61 @@ const getCallAccess = (booking) => {
   const startsAt = startAt ? startAt.getTime() : 0;
   const endsAt = endAt ? endAt.getTime() : 0;
   const joinOpensAt = startsAt - CALL_JOIN_EARLY_MINUTES * 60 * 1000;
-  const isConfirmedPaid = booking.status === "confirmed" && booking.paymentStatus === "paid";
+  const bookingStatus = booking.status || booking.bookingStatus || "";
+  const isConfirmed = bookingStatus === "confirmed" || booking.bookingStatus === "confirmed";
+  const isPaid = booking.paymentStatus === "paid";
+  const isConfirmedPaid = isConfirmed && isPaid;
+  const isCompleted = booking.status === "completed" || booking.bookingStatus === "completed";
+  let joinReasonBlocked = "";
+  if (isCompleted || (endsAt > 0 && now >= endsAt)) joinReasonBlocked = "session_ended";
+  else if (!isPaid || !isConfirmed) joinReasonBlocked = "waiting_payment";
+  else if (!startsAt || !endsAt || now < joinOpensAt) joinReasonBlocked = "before_join_window";
+
+  const canJoin = !joinReasonBlocked;
 
   return {
     roomId: getBookingRoomId(booking),
+    serverNow: new Date(now),
     startsAt: startAt,
+    startAt,
     endsAt: endAt,
+    endAt,
     timezone,
     joinOpensAt: new Date(joinOpensAt),
+    joinStart: new Date(joinOpensAt),
     graceEndsAt: endAt,
+    joinEnd: endAt,
     remainingMs: Math.max(0, endsAt - now),
-    canJoin: isConfirmedPaid && startsAt > 0 && endsAt > 0 && now >= joinOpensAt && now < endsAt,
+    canJoin,
+    joinReasonBlocked,
     isEarly: isConfirmedPaid && now < joinOpensAt,
-    isExpired: endsAt > 0 && (now >= endsAt || booking.status === "completed"),
+    isExpired: isCompleted || (endsAt > 0 && now >= endsAt),
   };
 };
+
+const getBookingJoinLog = (booking, userId) => {
+  const { clientId, expertId } = getBookingParticipantIds(booking);
+  const callAccess = getCallAccess(booking);
+  return {
+    bookingId: getBookingRoomId(booking),
+    paymentStatus: booking.paymentStatus,
+    bookingStatus: booking.status || booking.bookingStatus,
+    isClient: clientId === String(userId || ""),
+    isExpert: expertId === String(userId || ""),
+    canJoin: callAccess.canJoin,
+    joinReasonBlocked: callAccess.joinReasonBlocked,
+    serverNow: callAccess.serverNow,
+    startAt: callAccess.startAt,
+    endAt: callAccess.endAt,
+    joinStart: callAccess.joinStart,
+    joinEnd: callAccess.joinEnd,
+  };
+};
+
+const formatBookingWithCallAccess = (booking) => ({
+  ...formatBookingForResponse(booking),
+  callAccess: getCallAccess(booking),
+});
 
 const canAccessBooking = async (booking, userId, options = {}) => {
   const clientObjectId = booking.clientId || booking.client;
@@ -656,13 +691,15 @@ router.get("/room/:roomId", authMiddleware, async (req, res) => {
     const hasAccess = await canAccessBooking(bookingDoc, req.user.id);
     if (!hasAccess) return res.status(403).json({ message: "You are not authorized for this meeting" });
     const callAccess = getCallAccess(bookingDoc);
+    const isConfirmedBooking = bookingDoc.status === "confirmed" || bookingDoc.bookingStatus === "confirmed";
     const canLoadEndedPaidBooking = bookingDoc.status === "completed" && bookingDoc.paymentStatus === "paid" && callAccess.isExpired;
-    if ((bookingDoc.status !== "confirmed" || bookingDoc.paymentStatus !== "paid") && !canLoadEndedPaidBooking) {
+    if ((!isConfirmedBooking || bookingDoc.paymentStatus !== "paid") && !canLoadEndedPaidBooking) {
       return res.status(403).json({ message: "This meeting is available only after confirmed payment" });
     }
 
     const booking = await populateBooking(Booking.findById(bookingDoc._id));
-    res.json({ booking: formatBookingForResponse(booking), callAccess });
+    console.info("[Booking Join Eligibility]", getBookingJoinLog(bookingDoc, req.user.id));
+    res.json({ booking: formatBookingWithCallAccess(booking), callAccess });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -682,10 +719,13 @@ router.get("/room/:roomId/zego-token", authMiddleware, async (req, res) => {
 
     const callAccess = getCallAccess(bookingDoc);
     if (!callAccess.canJoin) {
+      console.info("[Booking Join Eligibility]", getBookingJoinLog(bookingDoc, currentUserId));
       return res.status(403).json({
         message: callAccess.isExpired
           ? "This meeting has ended"
           : "This meeting is not inside the join window yet",
+        joinReasonBlocked: callAccess.joinReasonBlocked,
+        callAccess,
       });
     }
 
@@ -814,7 +854,11 @@ router.get("/my-bookings", authMiddleware, async (req, res) => {
       .populate("client expert", bookingPopulateFields)
       .sort({ isPriority: -1, startAt: 1, slotStart: 1 });
 
-    res.json(formatBookingsForResponse(bookings));
+    bookings.forEach((booking) => {
+      console.info("[Booking Join Eligibility]", getBookingJoinLog(booking, userId));
+    });
+
+    res.json(bookings.map(formatBookingWithCallAccess));
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -830,9 +874,11 @@ router.get("/:id", authMiddleware, async (req, res) => {
     if (!hasAccess) return res.status(403).json({ message: "You are not authorized to view this booking" });
 
     const booking = await populateBooking(Booking.findById(bookingDoc._id));
+    const callAccess = getCallAccess(bookingDoc);
+    console.info("[Booking Join Eligibility]", getBookingJoinLog(bookingDoc, req.user.id));
     res.json({
-      booking: formatBookingForResponse(booking),
-      callAccess: getCallAccess(bookingDoc),
+      booking: formatBookingWithCallAccess(booking),
+      callAccess,
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
