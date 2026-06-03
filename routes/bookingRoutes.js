@@ -18,11 +18,17 @@ const {
   getCanonicalBookingTimes,
   normalizeBookingTimezone,
 } = require("../utils/bookingTime");
+const {
+  ZEGO_TOKEN_EFFECTIVE_SECONDS,
+  ZEGO_LOGIN_PRIVILEGE,
+  ZEGO_PUBLISH_PRIVILEGE,
+  getZegoAppConfig,
+  getZegoWebServerConfig,
+  generateZegoToken04,
+  getZegoStreamId,
+} = require("../utils/zego");
 
 const CALL_JOIN_EARLY_MINUTES = 5;
-const ZEGO_TOKEN_EFFECTIVE_SECONDS = 60 * 60 * 2;
-const ZEGO_LOGIN_PRIVILEGE = "1";
-const ZEGO_PUBLISH_PRIVILEGE = "2";
 
 const bookingPopulateFields = "name email profilePhotoUrl profileImage profilePhoto avatar photoUrl googlePhoto title rating reviewsCount role";
 
@@ -47,95 +53,6 @@ const getCurrentBookingRole = (booking, userId) => {
   return "";
 };
 
-const getZegoStreamId = (roomId, userId) => {
-  const cleanRoomId = String(roomId || "").replace(/[^a-zA-Z0-9_-]/g, "");
-  const cleanUserId = String(userId || "").replace(/[^a-zA-Z0-9_-]/g, "");
-  return `vc_${cleanRoomId}_${cleanUserId}`.slice(0, 240);
-};
-
-const getZegoAppConfig = () => {
-  const appID = Number(process.env.ZEGO_APP_ID || 0);
-  const serverSecret = String(process.env.ZEGO_SERVER_SECRET || "").trim();
-
-  if (!Number.isSafeInteger(appID) || appID <= 0) {
-    return { error: "Zego app ID is not configured" };
-  }
-
-  if (serverSecret.length !== 32) {
-    return { error: "Zego server secret is not configured" };
-  }
-
-  return { appID, serverSecret, serverConfigured: true };
-};
-
-const getZegoWebServerConfig = () => {
-  const rawServer = String(process.env.ZEGO_WEB_SERVER_URL || process.env.ZEGO_SERVER || process.env.ZEGO_SERVER_URL || "").trim();
-  const servers = rawServer
-    .split(",")
-    .map((server) => server.trim())
-    .filter((server) => /^(wss?|https?):\/\//i.test(server));
-
-  if (servers.length === 0) return { server: "", configured: false };
-  return {
-    server: servers.length === 1 ? servers[0] : servers,
-    configured: true,
-  };
-};
-
-const getZegoRandomInt = () => crypto.randomInt(-2147483648, 2147483647);
-
-const getZegoRandomIv = () => {
-  const possible = "0123456789abcdefghijklmnopqrstuvwxyz";
-  let iv = "";
-  for (let index = 0; index < 16; index += 1) {
-    iv += possible.charAt(crypto.randomInt(0, possible.length));
-  }
-  return iv;
-};
-
-const generateZegoToken04 = (appID, userID, serverSecret, effectiveTimeInSeconds, payload) => {
-  if (!Number.isSafeInteger(appID) || appID <= 0) throw new Error("Zego app ID is invalid");
-  if (!userID || String(userID).length > 64) throw new Error("Zego user ID is invalid");
-  if (!serverSecret || serverSecret.length !== 32) throw new Error("Zego server secret is invalid");
-  if (!Number.isInteger(effectiveTimeInSeconds) || effectiveTimeInSeconds <= 0) {
-    throw new Error("Zego token lifetime is invalid");
-  }
-
-  const nowSeconds = Math.floor(Date.now() / 1000);
-  const expiresAt = nowSeconds + effectiveTimeInSeconds;
-  const tokenInfo = {
-    app_id: appID,
-    user_id: userID,
-    nonce: getZegoRandomInt(),
-    ctime: nowSeconds,
-    expire: expiresAt,
-    payload,
-  };
-  const iv = getZegoRandomIv();
-  const ivBuffer = Buffer.from(iv);
-  const cipher = crypto.createCipheriv("aes-256-cbc", serverSecret, iv);
-  const encrypted = Buffer.concat([
-    cipher.update(JSON.stringify(tokenInfo), "utf8"),
-    cipher.final(),
-  ]);
-  const binary = Buffer.alloc(8 + 2 + ivBuffer.length + 2 + encrypted.length);
-  let offset = 0;
-
-  binary.writeBigUInt64BE(BigInt(expiresAt), offset);
-  offset += 8;
-  binary.writeUInt16BE(ivBuffer.length, offset);
-  offset += 2;
-  ivBuffer.copy(binary, offset);
-  offset += ivBuffer.length;
-  binary.writeUInt16BE(encrypted.length, offset);
-  offset += 2;
-  encrypted.copy(binary, offset);
-
-  return {
-    token: `04${binary.toString("base64")}`,
-    expiresAt,
-  };
-};
 
 const getCallAccess = (booking) => {
   const now = Date.now();
@@ -791,7 +708,7 @@ router.get("/room/:roomId/zego-token", authMiddleware, async (req, res) => {
         [ZEGO_LOGIN_PRIVILEGE]: 1,
         [ZEGO_PUBLISH_PRIVILEGE]: 1,
       },
-      stream_id_list: [streamID],
+      stream_id_list: null,
     });
     const { token, expiresAt } = generateZegoToken04(
       zegoConfig.appID,

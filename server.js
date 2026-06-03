@@ -53,7 +53,7 @@ app.use((req, res, next) => {
     "Permissions-Policy",
     "camera=(self), microphone=(self), geolocation=(), payment=(self), fullscreen=(self), display-capture=(self), clipboard-read=(self), clipboard-write=(self)"
   );
-  res.setHeader("Content-Security-Policy", "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'");
+  res.setHeader("Content-Security-Policy", "default-src 'self'; connect-src 'self' *.zegocloud.com; script-src 'self' 'unsafe-inline' *.zegocloud.com; img-src 'self' data: *.zegocloud.com; media-src 'self' *.zegocloud.com; base-uri 'self'; object-src 'none'; frame-ancestors 'none'");
   next();
 });
 
