@@ -14,6 +14,7 @@ const {
   applyCanonicalBookingTimes,
   ensureBookingVideoCallUrl,
   formatBookingForResponse,
+  getBookingJoinDiagnostics,
   getCanonicalBookingTimes,
   normalizeBookingTimezone,
 } = require("../utils/bookingTime");
@@ -153,6 +154,7 @@ const getCallAccess = (booking) => {
   else if (!startsAt || !endsAt || now < joinOpensAt) joinReasonBlocked = "before_join_window";
 
   const canJoin = !joinReasonBlocked;
+  const joinDiagnostics = getBookingJoinDiagnostics(booking, now);
 
   return {
     roomId: getBookingRoomId(booking),
@@ -171,6 +173,9 @@ const getCallAccess = (booking) => {
     joinReasonBlocked,
     isEarly: isConfirmedPaid && now < joinOpensAt,
     isExpired: isCompleted || (endsAt > 0 && now >= endsAt),
+    joinReason: joinDiagnostics.joinReason,
+    secondsUntilJoin: joinDiagnostics.secondsUntilJoin,
+    secondsUntilEnd: joinDiagnostics.secondsUntilEnd,
   };
 };
 
