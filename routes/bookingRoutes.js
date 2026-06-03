@@ -21,11 +21,112 @@ const {
 } = require("../utils/bookingTime");
 
 const CALL_JOIN_EARLY_MINUTES = 5;
+const ZEGO_TOKEN_EFFECTIVE_SECONDS = 60 * 60 * 2;
+const ZEGO_LOGIN_PRIVILEGE = "1";
+const ZEGO_PUBLISH_PRIVILEGE = "2";
 
 const bookingPopulateFields = "name email profilePhotoUrl profileImage profilePhoto avatar photoUrl googlePhoto title rating reviewsCount role";
 
 const getBookingRoomId = (booking) => {
   return booking?._id?.toString?.() || "";
+};
+
+const getIdString = (value) => {
+  if (!value) return "";
+  return String(value?._id || value);
+};
+
+const getBookingParticipantIds = (booking) => ({
+  clientId: getIdString(booking.clientId || booking.client),
+  expertId: getIdString(booking.expertId || booking.expert),
+});
+
+const getCurrentBookingRole = (booking, userId) => {
+  const { clientId, expertId } = getBookingParticipantIds(booking);
+  if (clientId && clientId === userId) return "client";
+  if (expertId && expertId === userId) return "expert";
+  return "";
+};
+
+const getZegoStreamId = (roomId, userId) => {
+  const cleanRoomId = String(roomId || "").replace(/[^a-zA-Z0-9_-]/g, "");
+  const cleanUserId = String(userId || "").replace(/[^a-zA-Z0-9_-]/g, "");
+  return `vc_${cleanRoomId}_${cleanUserId}`.slice(0, 240);
+};
+
+const getZegoAppConfig = () => {
+  const appID = Number(process.env.ZEGO_APP_ID || 0);
+  const serverSecret = String(process.env.ZEGO_SERVER_SECRET || "").trim();
+
+  if (!Number.isSafeInteger(appID) || appID <= 0) {
+    return { error: "Zego app ID is not configured" };
+  }
+
+  if (serverSecret.length !== 32) {
+    return { error: "Zego server secret is not configured" };
+  }
+
+  return { appID, serverSecret, serverConfigured: true };
+};
+
+const getZegoWebServerConfig = () => {
+  const rawServer = String(process.env.ZEGO_WEB_SERVER_URL || process.env.ZEGO_SERVER || process.env.ZEGO_SERVER_URL || "").trim();
+  const servers = rawServer
+    .split(",")
+    .map((server) => server.trim())
+    .filter((server) => /^(wss?|https?):\/\//i.test(server));
+
+  if (servers.length === 0) {
+    // Fallback to Zego's standard RTC API endpoint if nothing is configured
+    return { server: "wss://rtc-api.zego.im/ws", configured: true, isFallback: true };
+  }
+  return {
+    server: servers.length === 1 ? servers[0] : servers,
+    configured: true,
+  };
+};
+
+const generateZegoToken04 = (appID, userID, serverSecret, effectiveTimeInSeconds, payload) => {
+  if (!Number.isSafeInteger(appID) || appID <= 0) throw new Error("Zego app ID is invalid");
+  if (!userID || String(userID).length > 64) throw new Error("Zego user ID is invalid");
+  if (!serverSecret || serverSecret.length !== 32) throw new Error("Zego server secret is invalid");
+  if (!Number.isInteger(effectiveTimeInSeconds) || effectiveTimeInSeconds <= 0) {
+    throw new Error("Zego token lifetime is invalid");
+  }
+
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const expiresAt = nowSeconds + effectiveTimeInSeconds;
+  const tokenInfo = {
+    app_id: appID,
+    user_id: userID,
+    ctime: nowSeconds,
+    expire: expiresAt,
+    nonce: crypto.randomInt(0, 2147483647),
+    payload,
+  };
+  const iv = crypto.randomBytes(16);
+  const cipher = crypto.createCipheriv("aes-256-cbc", Buffer.from(serverSecret, "utf8"), iv);
+  const encrypted = Buffer.concat([
+    cipher.update(JSON.stringify(tokenInfo), "utf8"),
+    cipher.final(),
+  ]);
+  const binary = Buffer.alloc(8 + 2 + iv.length + 2 + encrypted.length);
+  let offset = 0;
+
+  binary.writeBigUInt64BE(BigInt(expiresAt), offset);
+  offset += 8;
+  binary.writeUInt16BE(iv.length, offset);
+  offset += 2;
+  iv.copy(binary, offset);
+  offset += iv.length;
+  binary.writeUInt16BE(encrypted.length, offset);
+  offset += 2;
+  encrypted.copy(binary, offset);
+
+  return {
+    token: `04${binary.toString("base64")}`,
+    expiresAt,
+  };
 };
 
 const getCallAccess = (booking) => {
@@ -585,7 +686,109 @@ router.get("/room/:roomId", authMiddleware, async (req, res) => {
   }
 });
 
-// 4. AUTO-COMPLETE A BOOKING WHEN THE BOOKED CALL TIME ENDS
+// 4. GET ZEGO TOKEN FOR A BOOKED VIDEO ROOM
+router.get("/room/:roomId/zego-token", authMiddleware, async (req, res) => {
+  try {
+    const roomId = req.params.roomId;
+    const currentUserId = String(req.user?.id || "");
+    const bookingDoc = await Booking.findById(roomId).catch(() => null)
+      || await Booking.findOne({ meetingLink: `/video-call/${roomId}` });
+    if (!bookingDoc) return res.status(404).json({ message: "Meeting room not found" });
+
+    const hasAccess = await canAccessBooking(bookingDoc, currentUserId);
+    if (!hasAccess) return res.status(403).json({ message: "You are not authorized for this meeting" });
+
+    const callAccess = getCallAccess(bookingDoc);
+    if (!callAccess.canJoin) {
+      return res.status(403).json({
+        message: callAccess.isExpired
+          ? "This meeting has ended"
+          : "This meeting is not inside the join window yet",
+      });
+    }
+
+    const { clientId, expertId } = getBookingParticipantIds(bookingDoc);
+    const currentUserRole = getCurrentBookingRole(bookingDoc, currentUserId);
+    if (!currentUserId || !clientId || !expertId) {
+      return res.status(400).json({ message: "Meeting participant IDs are missing" });
+    }
+    if (clientId === expertId) {
+      return res.status(400).json({ message: "Client and expert cannot share the same video user ID" });
+    }
+    if (!currentUserRole) {
+      return res.status(403).json({ message: "Current user is not a participant in this meeting" });
+    }
+
+    const zegoConfig = getZegoAppConfig();
+    if (zegoConfig.error) {
+      console.error("[Zego Config Missing]", {
+        roomId: callAccess.roomId,
+        currentUserId,
+        currentUserRole,
+        reason: zegoConfig.error,
+      });
+      return res.status(500).json({ message: "Zego app configuration is missing on the backend" });
+    }
+
+    const streamID = getZegoStreamId(callAccess.roomId, currentUserId);
+    const remainingSeconds = Math.max(300, Math.ceil((callAccess.endsAt.getTime() - Date.now()) / 1000) + 300);
+    const tokenLifetime = Math.min(ZEGO_TOKEN_EFFECTIVE_SECONDS, remainingSeconds);
+    const payload = JSON.stringify({
+      room_id: callAccess.roomId,
+      privilege: {
+        [ZEGO_LOGIN_PRIVILEGE]: 1,
+        [ZEGO_PUBLISH_PRIVILEGE]: 1,
+      },
+      stream_id_list: [streamID],
+    });
+    const { token, expiresAt } = generateZegoToken04(
+      zegoConfig.appID,
+      currentUserId,
+      zegoConfig.serverSecret,
+      tokenLifetime,
+      payload
+    );
+
+    const zegoWebServer = getZegoWebServerConfig();
+
+    console.info("[Zego Token Issued]", {
+      roomId: callAccess.roomId,
+      currentUserId,
+      currentUserRole,
+      streamID,
+      tokenExpiresAt: new Date(expiresAt * 1000).toISOString(),
+      serverConfigured: zegoConfig.serverConfigured,
+      zegoWebServerConfigured: zegoWebServer.configured,
+    });
+
+    res.json({
+      success: true,
+      appId: zegoConfig.appID,
+      appID: zegoConfig.appID,
+      serverConfigured: zegoConfig.serverConfigured,
+      zegoWebServerConfigured: zegoWebServer.configured,
+      server: zegoWebServer.server,
+      roomId: callAccess.roomId,
+      userId: currentUserId,
+      userID: currentUserId,
+      userName: `${currentUserRole}-${currentUserId.slice(-6)}`,
+      currentUserRole,
+      streamID,
+      token,
+      tokenExpiresAt: new Date(expiresAt * 1000).toISOString(),
+      tokenExpiresIn: tokenLifetime,
+    });
+  } catch (error) {
+    console.error("[Zego Token Error]", {
+      roomId: req.params.roomId,
+      currentUserId: req.user?.id || null,
+      message: error.message,
+    });
+    res.status(500).json({ message: "Failed to prepare video call access" });
+  }
+});
+
+// 5. AUTO-COMPLETE A BOOKING WHEN THE BOOKED CALL TIME ENDS
 router.put("/room/:roomId/complete", authMiddleware, async (req, res) => {
   try {
     const roomId = req.params.roomId;
