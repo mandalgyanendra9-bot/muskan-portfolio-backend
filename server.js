@@ -81,6 +81,7 @@ app.use("/api/posts", require("./routes/postRoutes"));
 app.use("/api/analytics", require("./routes/analyticsRoutes"));
 app.use("/api/availability", require("./routes/availability"));
 app.use("/api/bookings", require("./routes/bookingRoutes"));
+app.use("/api/debug", require("./routes/debugRoutes"));
 app.use("/api/slots", require("./routes/slots"));
 app.use("/api/profiles", require("./routes/profileRoutes"));
 app.use("/api/reviews", require("./routes/reviewRoutes"));

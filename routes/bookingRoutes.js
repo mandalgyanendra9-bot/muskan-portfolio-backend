@@ -14,7 +14,10 @@ const {
   applyCanonicalBookingTimes,
   ensureBookingVideoCallUrl,
   formatBookingForResponse,
+<<<<<<< HEAD
   formatBookingsForResponse,
+=======
+>>>>>>> d79a17405617adef3217969ff2bac20e956363dc
   getBookingJoinDiagnostics,
   getCanonicalBookingTimes,
   normalizeBookingTimezone,
@@ -76,16 +79,34 @@ const getZegoWebServerConfig = () => {
     .map((server) => server.trim())
     .filter((server) => /^(wss?|https?):\/\//i.test(server));
 
+<<<<<<< HEAD
   if (servers.length === 0) {
     // Fallback to Zego's standard RTC API endpoint if nothing is configured
     return { server: "wss://rtc-api.zego.im/ws", configured: true, isFallback: true };
   }
+=======
+  if (servers.length === 0) return { server: "", configured: false };
+>>>>>>> d79a17405617adef3217969ff2bac20e956363dc
   return {
     server: servers.length === 1 ? servers[0] : servers,
     configured: true,
   };
 };
 
+<<<<<<< HEAD
+=======
+const getZegoRandomInt = () => crypto.randomInt(-2147483648, 2147483647);
+
+const getZegoRandomIv = () => {
+  const possible = "0123456789abcdefghijklmnopqrstuvwxyz";
+  let iv = "";
+  for (let index = 0; index < 16; index += 1) {
+    iv += possible.charAt(crypto.randomInt(0, possible.length));
+  }
+  return iv;
+};
+
+>>>>>>> d79a17405617adef3217969ff2bac20e956363dc
 const generateZegoToken04 = (appID, userID, serverSecret, effectiveTimeInSeconds, payload) => {
   if (!Number.isSafeInteger(appID) || appID <= 0) throw new Error("Zego app ID is invalid");
   if (!userID || String(userID).length > 64) throw new Error("Zego user ID is invalid");
@@ -99,6 +120,7 @@ const generateZegoToken04 = (appID, userID, serverSecret, effectiveTimeInSeconds
   const tokenInfo = {
     app_id: appID,
     user_id: userID,
+<<<<<<< HEAD
     ctime: nowSeconds,
     expire: expiresAt,
     nonce: crypto.randomInt(0, 2147483647),
@@ -106,19 +128,40 @@ const generateZegoToken04 = (appID, userID, serverSecret, effectiveTimeInSeconds
   };
   const iv = crypto.randomBytes(16);
   const cipher = crypto.createCipheriv("aes-256-cbc", Buffer.from(serverSecret, "utf8"), iv);
+=======
+    nonce: getZegoRandomInt(),
+    ctime: nowSeconds,
+    expire: expiresAt,
+    payload,
+  };
+  const iv = getZegoRandomIv();
+  const ivBuffer = Buffer.from(iv);
+  const cipher = crypto.createCipheriv("aes-256-cbc", serverSecret, iv);
+>>>>>>> d79a17405617adef3217969ff2bac20e956363dc
   const encrypted = Buffer.concat([
     cipher.update(JSON.stringify(tokenInfo), "utf8"),
     cipher.final(),
   ]);
+<<<<<<< HEAD
   const binary = Buffer.alloc(8 + 2 + iv.length + 2 + encrypted.length);
+=======
+  const binary = Buffer.alloc(8 + 2 + ivBuffer.length + 2 + encrypted.length);
+>>>>>>> d79a17405617adef3217969ff2bac20e956363dc
   let offset = 0;
 
   binary.writeBigUInt64BE(BigInt(expiresAt), offset);
   offset += 8;
+<<<<<<< HEAD
   binary.writeUInt16BE(iv.length, offset);
   offset += 2;
   iv.copy(binary, offset);
   offset += iv.length;
+=======
+  binary.writeUInt16BE(ivBuffer.length, offset);
+  offset += 2;
+  ivBuffer.copy(binary, offset);
+  offset += ivBuffer.length;
+>>>>>>> d79a17405617adef3217969ff2bac20e956363dc
   binary.writeUInt16BE(encrypted.length, offset);
   offset += 2;
   encrypted.copy(binary, offset);
@@ -135,26 +178,74 @@ const getCallAccess = (booking) => {
   const startsAt = startAt ? startAt.getTime() : 0;
   const endsAt = endAt ? endAt.getTime() : 0;
   const joinOpensAt = startsAt - CALL_JOIN_EARLY_MINUTES * 60 * 1000;
+<<<<<<< HEAD
   const isConfirmedPaid = booking.status === "confirmed" && booking.paymentStatus === "paid";
+=======
+  const bookingStatus = booking.status || booking.bookingStatus || "";
+  const isConfirmed = bookingStatus === "confirmed" || booking.bookingStatus === "confirmed";
+  const isPaid = booking.paymentStatus === "paid";
+  const isConfirmedPaid = isConfirmed && isPaid;
+  const isCompleted = booking.status === "completed" || booking.bookingStatus === "completed";
+  let joinReasonBlocked = "";
+  if (isCompleted || (endsAt > 0 && now >= endsAt)) joinReasonBlocked = "session_ended";
+  else if (!isPaid || !isConfirmed) joinReasonBlocked = "waiting_payment";
+  else if (!startsAt || !endsAt || now < joinOpensAt) joinReasonBlocked = "before_join_window";
+
+  const canJoin = !joinReasonBlocked;
+>>>>>>> d79a17405617adef3217969ff2bac20e956363dc
   const joinDiagnostics = getBookingJoinDiagnostics(booking, now);
 
   return {
     roomId: getBookingRoomId(booking),
+    serverNow: new Date(now),
     startsAt: startAt,
+    startAt,
     endsAt: endAt,
+    endAt,
     timezone,
     joinOpensAt: new Date(joinOpensAt),
+    joinStart: new Date(joinOpensAt),
     graceEndsAt: endAt,
+    joinEnd: endAt,
     remainingMs: Math.max(0, endsAt - now),
-    canJoin: isConfirmedPaid && startsAt > 0 && endsAt > 0 && now >= joinOpensAt && now < endsAt,
+    canJoin,
+    joinReasonBlocked,
     isEarly: isConfirmedPaid && now < joinOpensAt,
+<<<<<<< HEAD
     isExpired: endsAt > 0 && (now >= endsAt || booking.status === "completed"),
     serverNow: joinDiagnostics.serverNow,
+=======
+    isExpired: isCompleted || (endsAt > 0 && now >= endsAt),
+>>>>>>> d79a17405617adef3217969ff2bac20e956363dc
     joinReason: joinDiagnostics.joinReason,
     secondsUntilJoin: joinDiagnostics.secondsUntilJoin,
     secondsUntilEnd: joinDiagnostics.secondsUntilEnd,
   };
 };
+
+const getBookingJoinLog = (booking, userId) => {
+  const { clientId, expertId } = getBookingParticipantIds(booking);
+  const callAccess = getCallAccess(booking);
+  return {
+    bookingId: getBookingRoomId(booking),
+    paymentStatus: booking.paymentStatus,
+    bookingStatus: booking.status || booking.bookingStatus,
+    isClient: clientId === String(userId || ""),
+    isExpert: expertId === String(userId || ""),
+    canJoin: callAccess.canJoin,
+    joinReasonBlocked: callAccess.joinReasonBlocked,
+    serverNow: callAccess.serverNow,
+    startAt: callAccess.startAt,
+    endAt: callAccess.endAt,
+    joinStart: callAccess.joinStart,
+    joinEnd: callAccess.joinEnd,
+  };
+};
+
+const formatBookingWithCallAccess = (booking) => ({
+  ...formatBookingForResponse(booking),
+  callAccess: getCallAccess(booking),
+});
 
 const canAccessBooking = async (booking, userId, options = {}) => {
   const clientObjectId = booking.clientId || booking.client;
@@ -674,13 +765,15 @@ router.get("/room/:roomId", authMiddleware, async (req, res) => {
     const hasAccess = await canAccessBooking(bookingDoc, req.user.id);
     if (!hasAccess) return res.status(403).json({ message: "You are not authorized for this meeting" });
     const callAccess = getCallAccess(bookingDoc);
+    const isConfirmedBooking = bookingDoc.status === "confirmed" || bookingDoc.bookingStatus === "confirmed";
     const canLoadEndedPaidBooking = bookingDoc.status === "completed" && bookingDoc.paymentStatus === "paid" && callAccess.isExpired;
-    if ((bookingDoc.status !== "confirmed" || bookingDoc.paymentStatus !== "paid") && !canLoadEndedPaidBooking) {
+    if ((!isConfirmedBooking || bookingDoc.paymentStatus !== "paid") && !canLoadEndedPaidBooking) {
       return res.status(403).json({ message: "This meeting is available only after confirmed payment" });
     }
 
     const booking = await populateBooking(Booking.findById(bookingDoc._id));
-    res.json({ booking: formatBookingForResponse(booking), callAccess });
+    console.info("[Booking Join Eligibility]", getBookingJoinLog(bookingDoc, req.user.id));
+    res.json({ booking: formatBookingWithCallAccess(booking), callAccess });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -700,10 +793,19 @@ router.get("/room/:roomId/zego-token", authMiddleware, async (req, res) => {
 
     const callAccess = getCallAccess(bookingDoc);
     if (!callAccess.canJoin) {
+<<<<<<< HEAD
+=======
+      console.info("[Booking Join Eligibility]", getBookingJoinLog(bookingDoc, currentUserId));
+>>>>>>> d79a17405617adef3217969ff2bac20e956363dc
       return res.status(403).json({
         message: callAccess.isExpired
           ? "This meeting has ended"
           : "This meeting is not inside the join window yet",
+<<<<<<< HEAD
+=======
+        joinReasonBlocked: callAccess.joinReasonBlocked,
+        callAccess,
+>>>>>>> d79a17405617adef3217969ff2bac20e956363dc
       });
     }
 
@@ -748,6 +850,7 @@ router.get("/room/:roomId/zego-token", authMiddleware, async (req, res) => {
       tokenLifetime,
       payload
     );
+<<<<<<< HEAD
 
     const zegoWebServer = getZegoWebServerConfig();
 
@@ -757,6 +860,34 @@ router.get("/room/:roomId/zego-token", authMiddleware, async (req, res) => {
       currentUserRole,
       streamID,
       tokenExpiresAt: new Date(expiresAt * 1000).toISOString(),
+=======
+    if (!token) {
+      console.error("[Zego Token Error]", {
+        roomId: callAccess.roomId,
+        currentUserId,
+        currentUserRole,
+        reason: "empty token",
+      });
+      return res.status(500).json({ message: "Failed to prepare video call access" });
+    }
+    const appIdMatchesEnv = zegoConfig.appID === Number(process.env.ZEGO_APP_ID || 0);
+    const tokenExpiresAt = new Date(expiresAt * 1000).toISOString();
+    const zegoWebServer = getZegoWebServerConfig();
+
+    console.info("[Zego Token Issued]", {
+      success: true,
+      appId: zegoConfig.appID,
+      appIdMatchesEnv,
+      roomId: callAccess.roomId,
+      userId: currentUserId,
+      currentUserId,
+      currentUserRole,
+      streamID,
+      tokenIssued: true,
+      tokenLength: token.length,
+      tokenExpiresAt,
+      tokenExpiresIn: tokenLifetime,
+>>>>>>> d79a17405617adef3217969ff2bac20e956363dc
       serverConfigured: zegoConfig.serverConfigured,
       zegoWebServerConfigured: zegoWebServer.configured,
     });
@@ -768,6 +899,10 @@ router.get("/room/:roomId/zego-token", authMiddleware, async (req, res) => {
       serverConfigured: zegoConfig.serverConfigured,
       zegoWebServerConfigured: zegoWebServer.configured,
       server: zegoWebServer.server,
+<<<<<<< HEAD
+=======
+      appIdMatchesEnv,
+>>>>>>> d79a17405617adef3217969ff2bac20e956363dc
       roomId: callAccess.roomId,
       userId: currentUserId,
       userID: currentUserId,
@@ -775,7 +910,12 @@ router.get("/room/:roomId/zego-token", authMiddleware, async (req, res) => {
       currentUserRole,
       streamID,
       token,
+<<<<<<< HEAD
       tokenExpiresAt: new Date(expiresAt * 1000).toISOString(),
+=======
+      tokenLength: token.length,
+      tokenExpiresAt,
+>>>>>>> d79a17405617adef3217969ff2bac20e956363dc
       tokenExpiresIn: tokenLifetime,
     });
   } catch (error) {
@@ -841,7 +981,11 @@ router.get("/my-bookings", authMiddleware, async (req, res) => {
       .populate("client expert", bookingPopulateFields)
       .sort({ isPriority: -1, startAt: 1, slotStart: 1 });
 
-    res.json(formatBookingsForResponse(bookings));
+    bookings.forEach((booking) => {
+      console.info("[Booking Join Eligibility]", getBookingJoinLog(booking, userId));
+    });
+
+    res.json(bookings.map(formatBookingWithCallAccess));
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -857,9 +1001,11 @@ router.get("/:id", authMiddleware, async (req, res) => {
     if (!hasAccess) return res.status(403).json({ message: "You are not authorized to view this booking" });
 
     const booking = await populateBooking(Booking.findById(bookingDoc._id));
+    const callAccess = getCallAccess(bookingDoc);
+    console.info("[Booking Join Eligibility]", getBookingJoinLog(bookingDoc, req.user.id));
     res.json({
-      booking: formatBookingForResponse(booking),
-      callAccess: getCallAccess(bookingDoc),
+      booking: formatBookingWithCallAccess(booking),
+      callAccess,
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
