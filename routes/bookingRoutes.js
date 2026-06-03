@@ -14,10 +14,6 @@ const {
   applyCanonicalBookingTimes,
   ensureBookingVideoCallUrl,
   formatBookingForResponse,
-<<<<<<< HEAD
-  formatBookingsForResponse,
-=======
->>>>>>> d79a17405617adef3217969ff2bac20e956363dc
   getBookingJoinDiagnostics,
   getCanonicalBookingTimes,
   normalizeBookingTimezone,
@@ -79,22 +75,16 @@ const getZegoWebServerConfig = () => {
     .map((server) => server.trim())
     .filter((server) => /^(wss?|https?):\/\//i.test(server));
 
-<<<<<<< HEAD
   if (servers.length === 0) {
     // Fallback to Zego's standard RTC API endpoint if nothing is configured
     return { server: "wss://rtc-api.zego.im/ws", configured: true, isFallback: true };
   }
-=======
-  if (servers.length === 0) return { server: "", configured: false };
->>>>>>> d79a17405617adef3217969ff2bac20e956363dc
   return {
     server: servers.length === 1 ? servers[0] : servers,
     configured: true,
   };
 };
 
-<<<<<<< HEAD
-=======
 const getZegoRandomInt = () => crypto.randomInt(-2147483648, 2147483647);
 
 const getZegoRandomIv = () => {
@@ -106,7 +96,6 @@ const getZegoRandomIv = () => {
   return iv;
 };
 
->>>>>>> d79a17405617adef3217969ff2bac20e956363dc
 const generateZegoToken04 = (appID, userID, serverSecret, effectiveTimeInSeconds, payload) => {
   if (!Number.isSafeInteger(appID) || appID <= 0) throw new Error("Zego app ID is invalid");
   if (!userID || String(userID).length > 64) throw new Error("Zego user ID is invalid");
@@ -120,15 +109,6 @@ const generateZegoToken04 = (appID, userID, serverSecret, effectiveTimeInSeconds
   const tokenInfo = {
     app_id: appID,
     user_id: userID,
-<<<<<<< HEAD
-    ctime: nowSeconds,
-    expire: expiresAt,
-    nonce: crypto.randomInt(0, 2147483647),
-    payload,
-  };
-  const iv = crypto.randomBytes(16);
-  const cipher = crypto.createCipheriv("aes-256-cbc", Buffer.from(serverSecret, "utf8"), iv);
-=======
     nonce: getZegoRandomInt(),
     ctime: nowSeconds,
     expire: expiresAt,
@@ -137,31 +117,19 @@ const generateZegoToken04 = (appID, userID, serverSecret, effectiveTimeInSeconds
   const iv = getZegoRandomIv();
   const ivBuffer = Buffer.from(iv);
   const cipher = crypto.createCipheriv("aes-256-cbc", serverSecret, iv);
->>>>>>> d79a17405617adef3217969ff2bac20e956363dc
   const encrypted = Buffer.concat([
     cipher.update(JSON.stringify(tokenInfo), "utf8"),
     cipher.final(),
   ]);
-<<<<<<< HEAD
-  const binary = Buffer.alloc(8 + 2 + iv.length + 2 + encrypted.length);
-=======
   const binary = Buffer.alloc(8 + 2 + ivBuffer.length + 2 + encrypted.length);
->>>>>>> d79a17405617adef3217969ff2bac20e956363dc
   let offset = 0;
 
   binary.writeBigUInt64BE(BigInt(expiresAt), offset);
   offset += 8;
-<<<<<<< HEAD
-  binary.writeUInt16BE(iv.length, offset);
-  offset += 2;
-  iv.copy(binary, offset);
-  offset += iv.length;
-=======
   binary.writeUInt16BE(ivBuffer.length, offset);
   offset += 2;
   ivBuffer.copy(binary, offset);
   offset += ivBuffer.length;
->>>>>>> d79a17405617adef3217969ff2bac20e956363dc
   binary.writeUInt16BE(encrypted.length, offset);
   offset += 2;
   encrypted.copy(binary, offset);
@@ -178,9 +146,6 @@ const getCallAccess = (booking) => {
   const startsAt = startAt ? startAt.getTime() : 0;
   const endsAt = endAt ? endAt.getTime() : 0;
   const joinOpensAt = startsAt - CALL_JOIN_EARLY_MINUTES * 60 * 1000;
-<<<<<<< HEAD
-  const isConfirmedPaid = booking.status === "confirmed" && booking.paymentStatus === "paid";
-=======
   const bookingStatus = booking.status || booking.bookingStatus || "";
   const isConfirmed = bookingStatus === "confirmed" || booking.bookingStatus === "confirmed";
   const isPaid = booking.paymentStatus === "paid";
@@ -192,7 +157,6 @@ const getCallAccess = (booking) => {
   else if (!startsAt || !endsAt || now < joinOpensAt) joinReasonBlocked = "before_join_window";
 
   const canJoin = !joinReasonBlocked;
->>>>>>> d79a17405617adef3217969ff2bac20e956363dc
   const joinDiagnostics = getBookingJoinDiagnostics(booking, now);
 
   return {
@@ -211,12 +175,7 @@ const getCallAccess = (booking) => {
     canJoin,
     joinReasonBlocked,
     isEarly: isConfirmedPaid && now < joinOpensAt,
-<<<<<<< HEAD
-    isExpired: endsAt > 0 && (now >= endsAt || booking.status === "completed"),
-    serverNow: joinDiagnostics.serverNow,
-=======
     isExpired: isCompleted || (endsAt > 0 && now >= endsAt),
->>>>>>> d79a17405617adef3217969ff2bac20e956363dc
     joinReason: joinDiagnostics.joinReason,
     secondsUntilJoin: joinDiagnostics.secondsUntilJoin,
     secondsUntilEnd: joinDiagnostics.secondsUntilEnd,
@@ -793,19 +752,13 @@ router.get("/room/:roomId/zego-token", authMiddleware, async (req, res) => {
 
     const callAccess = getCallAccess(bookingDoc);
     if (!callAccess.canJoin) {
-<<<<<<< HEAD
-=======
       console.info("[Booking Join Eligibility]", getBookingJoinLog(bookingDoc, currentUserId));
->>>>>>> d79a17405617adef3217969ff2bac20e956363dc
       return res.status(403).json({
         message: callAccess.isExpired
           ? "This meeting has ended"
           : "This meeting is not inside the join window yet",
-<<<<<<< HEAD
-=======
         joinReasonBlocked: callAccess.joinReasonBlocked,
         callAccess,
->>>>>>> d79a17405617adef3217969ff2bac20e956363dc
       });
     }
 
@@ -850,17 +803,6 @@ router.get("/room/:roomId/zego-token", authMiddleware, async (req, res) => {
       tokenLifetime,
       payload
     );
-<<<<<<< HEAD
-
-    const zegoWebServer = getZegoWebServerConfig();
-
-    console.info("[Zego Token Issued]", {
-      roomId: callAccess.roomId,
-      currentUserId,
-      currentUserRole,
-      streamID,
-      tokenExpiresAt: new Date(expiresAt * 1000).toISOString(),
-=======
     if (!token) {
       console.error("[Zego Token Error]", {
         roomId: callAccess.roomId,
@@ -887,7 +829,6 @@ router.get("/room/:roomId/zego-token", authMiddleware, async (req, res) => {
       tokenLength: token.length,
       tokenExpiresAt,
       tokenExpiresIn: tokenLifetime,
->>>>>>> d79a17405617adef3217969ff2bac20e956363dc
       serverConfigured: zegoConfig.serverConfigured,
       zegoWebServerConfigured: zegoWebServer.configured,
     });
@@ -899,10 +840,7 @@ router.get("/room/:roomId/zego-token", authMiddleware, async (req, res) => {
       serverConfigured: zegoConfig.serverConfigured,
       zegoWebServerConfigured: zegoWebServer.configured,
       server: zegoWebServer.server,
-<<<<<<< HEAD
-=======
       appIdMatchesEnv,
->>>>>>> d79a17405617adef3217969ff2bac20e956363dc
       roomId: callAccess.roomId,
       userId: currentUserId,
       userID: currentUserId,
@@ -910,12 +848,8 @@ router.get("/room/:roomId/zego-token", authMiddleware, async (req, res) => {
       currentUserRole,
       streamID,
       token,
-<<<<<<< HEAD
-      tokenExpiresAt: new Date(expiresAt * 1000).toISOString(),
-=======
       tokenLength: token.length,
       tokenExpiresAt,
->>>>>>> d79a17405617adef3217969ff2bac20e956363dc
       tokenExpiresIn: tokenLifetime,
     });
   } catch (error) {
