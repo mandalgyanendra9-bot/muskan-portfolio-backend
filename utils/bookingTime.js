@@ -2,6 +2,7 @@ const moment = require("moment-timezone");
 const { DEFAULT_TIMEZONE } = require("./slotGenerator");
 
 const DEFAULT_BOOKING_TIMEZONE = DEFAULT_TIMEZONE || "Asia/Kolkata";
+const JOIN_WINDOW_EARLY_MINUTES = 5;
 const TIME_FORMATS = ["HH:mm", "H:mm", "hh:mm A", "h:mm A"];
 
 const normalizeBookingTimezone = (timezone) => {
@@ -76,11 +77,63 @@ const ensureBookingVideoCallUrl = (booking) => {
   return url;
 };
 
+const normalizeStatus = (status) => String(status || "").trim().toLowerCase();
+
+const getBookingJoinDiagnostics = (booking = {}, now = Date.now()) => {
+  const plain = booking?.toObject ? booking.toObject({ virtuals: true }) : { ...booking };
+  const { startAt, endAt } = getCanonicalBookingTimes(plain);
+  const startsAtMs = startAt ? startAt.getTime() : 0;
+  const endsAtMs = endAt ? endAt.getTime() : 0;
+  const joinOpensAtMs = startsAtMs ? startsAtMs - JOIN_WINDOW_EARLY_MINUTES * 60 * 1000 : 0;
+  const status = normalizeStatus(plain.status);
+  const bookingStatus = normalizeStatus(plain.bookingStatus || plain.status);
+  const paymentStatus = normalizeStatus(plain.paymentStatus);
+  const isConfirmed = status === "confirmed" || bookingStatus === "confirmed";
+  const isCompleted = status === "completed" || bookingStatus === "completed";
+  const isPaid = paymentStatus === "paid";
+
+  let joinReason = "join_open";
+  let canJoin = true;
+
+  if (!isPaid) {
+    joinReason = "waiting_payment";
+    canJoin = false;
+  } else if (!isConfirmed) {
+    joinReason = isCompleted ? "session_ended" : "not_confirmed";
+    canJoin = false;
+  } else if (!startsAtMs || !endsAtMs) {
+    joinReason = "time_unavailable";
+    canJoin = false;
+  } else if (isCompleted || now >= endsAtMs) {
+    joinReason = "session_ended";
+    canJoin = false;
+  } else if (now < joinOpensAtMs) {
+    joinReason = "before_join_window";
+    canJoin = false;
+  }
+
+  return {
+    bookingId: plain._id?.toString?.() || String(plain._id || ""),
+    status,
+    bookingStatus,
+    paymentStatus,
+    canJoin,
+    joinReason,
+    serverNow: new Date(now).toISOString(),
+    startsAt: startAt ? startAt.toISOString() : null,
+    endAt: endAt ? endAt.toISOString() : null,
+    joinOpensAt: joinOpensAtMs ? new Date(joinOpensAtMs).toISOString() : null,
+    secondsUntilJoin: joinOpensAtMs ? Math.max(0, Math.ceil((joinOpensAtMs - now) / 1000)) : null,
+    secondsUntilEnd: endsAtMs ? Math.max(0, Math.ceil((endsAtMs - now) / 1000)) : null,
+  };
+};
+
 const formatBookingForResponse = (booking) => {
   if (!booking) return booking;
   const plain = booking?.toObject ? booking.toObject({ virtuals: true }) : { ...booking };
   const { startAt, endAt, timezone } = getCanonicalBookingTimes(plain);
   const videoCallUrl = plain.videoCallUrl || plain.meetingLink || (plain._id ? `/video-call/${plain._id}` : "");
+  const serverNow = Date.now();
 
   return {
     ...plain,
@@ -92,6 +145,8 @@ const formatBookingForResponse = (booking) => {
     videoCallUrl,
     meetingLink: plain.meetingLink || videoCallUrl,
     completedAt: plain.completedAt || null,
+    serverNow: new Date(serverNow).toISOString(),
+    joinDiagnostics: getBookingJoinDiagnostics(plain, serverNow),
   };
 };
 
@@ -104,5 +159,6 @@ module.exports = {
   formatBookingForResponse,
   formatBookingsForResponse,
   getCanonicalBookingTimes,
+  getBookingJoinDiagnostics,
   normalizeBookingTimezone,
 };
