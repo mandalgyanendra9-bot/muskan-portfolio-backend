@@ -9,6 +9,7 @@ const router = express.Router();
 const ZEGO_TOKEN_EFFECTIVE_SECONDS = 60 * 60 * 2;
 const ZEGO_LOGIN_PRIVILEGE = "1";
 const ZEGO_PUBLISH_PRIVILEGE = "2";
+const ZEGO_LEGACY_RTC_SERVER = "wss://rtc-api.zego.im/ws";
 
 const getIdString = (value) => {
   if (!value) return "";
@@ -33,7 +34,10 @@ const getZegoWebServerConfigured = () => {
   return rawServer
     .split(",")
     .map((server) => server.trim())
-    .some((server) => /^(wss?|https?):\/\//i.test(server));
+    .some((server) => (
+      /^(wss?|https?):\/\//i.test(server) &&
+      server.replace(/\/+$/, "").toLowerCase() !== ZEGO_LEGACY_RTC_SERVER.replace(/\/+$/, "").toLowerCase()
+    ));
 };
 
 const getZegoRandomInt = () => crypto.randomInt(-2147483648, 2147483647);

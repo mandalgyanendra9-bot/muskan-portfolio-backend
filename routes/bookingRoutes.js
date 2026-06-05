@@ -23,6 +23,12 @@ const CALL_JOIN_EARLY_MINUTES = 5;
 const ZEGO_TOKEN_EFFECTIVE_SECONDS = 60 * 60 * 2;
 const ZEGO_LOGIN_PRIVILEGE = "1";
 const ZEGO_PUBLISH_PRIVILEGE = "2";
+const ZEGO_LEGACY_RTC_SERVER = "wss://rtc-api.zego.im/ws";
+const getDefaultZegoWebServers = (appID = 0) => [
+  Number.isSafeInteger(appID) && appID > 0 ? `wss://webliveroom${appID}-api.zegocloud.com/ws` : "",
+  "wss://webliveroom-api.zegocloud.com/ws",
+  "wss://webliveroom-api.zego.im/ws",
+].filter(Boolean);
 
 const bookingPopulateFields = "name email profilePhotoUrl profileImage profilePhoto avatar photoUrl googlePhoto title rating reviewsCount role";
 
@@ -68,20 +74,41 @@ const getZegoAppConfig = () => {
   return { appID, serverSecret, serverConfigured: true };
 };
 
-const getZegoWebServerConfig = () => {
-  const rawServer = String(process.env.ZEGO_WEB_SERVER_URL || process.env.ZEGO_SERVER || process.env.ZEGO_SERVER_URL || "").trim();
-  const servers = rawServer
-    .split(",")
-    .map((server) => server.trim())
-    .filter((server) => /^(wss?|https?):\/\//i.test(server));
+const normalizeZegoWebServers = (server) => {
+  const normalizeOne = (value) => {
+    const text = String(value || "").trim();
+    if (!text || !/^(wss?|https?):\/\//i.test(text)) return [];
+    if (text.replace(/\/+$/, "").toLowerCase() === ZEGO_LEGACY_RTC_SERVER.replace(/\/+$/, "").toLowerCase()) {
+      return [];
+    }
+    return [text];
+  };
 
-  if (servers.length === 0) {
-    // Fallback to Zego's standard RTC API endpoint if nothing is configured
-    return { server: "wss://rtc-api.zego.im/ws", configured: true, isFallback: true };
+  if (Array.isArray(server)) {
+    return server.flatMap(normalizeOne);
   }
+
+  return String(server || "")
+    .split(",")
+    .flatMap(normalizeOne);
+};
+
+const uniqueZegoWebServers = (servers = []) => servers.filter((server, index, list) => {
+  const normalized = String(server || "").replace(/\/+$/, "").toLowerCase();
+  return normalized && list.findIndex((item) => String(item || "").replace(/\/+$/, "").toLowerCase() === normalized) === index;
+});
+
+const getZegoWebServerConfig = (appID = 0) => {
+  const rawServer = String(process.env.ZEGO_WEB_SERVER_URL || process.env.ZEGO_SERVER || process.env.ZEGO_SERVER_URL || "").trim();
+  const envServers = normalizeZegoWebServers(rawServer);
+  const servers = uniqueZegoWebServers([...envServers, ...getDefaultZegoWebServers(appID)]);
+
   return {
     server: servers.length === 1 ? servers[0] : servers,
-    configured: true,
+    configured: servers.length > 0,
+    envConfigured: envServers.length > 0,
+    ignoredLegacyRtcServer: Boolean(rawServer) && envServers.length === 0,
+    isFallback: envServers.length === 0,
   };
 };
 
@@ -814,7 +841,7 @@ router.get("/room/:roomId/zego-token", authMiddleware, async (req, res) => {
     }
     const appIdMatchesEnv = zegoConfig.appID === Number(process.env.ZEGO_APP_ID || 0);
     const tokenExpiresAt = new Date(expiresAt * 1000).toISOString();
-    const zegoWebServer = getZegoWebServerConfig();
+    const zegoWebServer = getZegoWebServerConfig(zegoConfig.appID);
 
     console.info("[Zego Token Issued]", {
       success: true,
@@ -831,6 +858,8 @@ router.get("/room/:roomId/zego-token", authMiddleware, async (req, res) => {
       tokenExpiresIn: tokenLifetime,
       serverConfigured: zegoConfig.serverConfigured,
       zegoWebServerConfigured: zegoWebServer.configured,
+      zegoWebServerEnvConfigured: zegoWebServer.envConfigured,
+      zegoWebServerUsingFallback: zegoWebServer.isFallback,
     });
 
     res.json({
@@ -839,6 +868,8 @@ router.get("/room/:roomId/zego-token", authMiddleware, async (req, res) => {
       appID: zegoConfig.appID,
       serverConfigured: zegoConfig.serverConfigured,
       zegoWebServerConfigured: zegoWebServer.configured,
+      zegoWebServerEnvConfigured: zegoWebServer.envConfigured,
+      zegoWebServerUsingFallback: zegoWebServer.isFallback,
       server: zegoWebServer.server,
       appIdMatchesEnv,
       roomId: callAccess.roomId,
