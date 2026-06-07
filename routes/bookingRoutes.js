@@ -71,7 +71,14 @@ const getZegoAppConfig = () => {
     return { error: "Zego server secret is not configured" };
   }
 
-  return { appID, serverSecret, serverConfigured: true };
+  return {
+    appID,
+    serverSecret,
+    serverConfigured: true,
+    appIdEnvConfigured: true,
+    serverSecretConfigured: true,
+    serverSecretLength: serverSecret.length,
+  };
 };
 
 const normalizeZegoWebServers = (server) => {
@@ -105,6 +112,7 @@ const getZegoWebServerConfig = (appID = 0) => {
 
   return {
     server: servers.length === 1 ? servers[0] : servers,
+    serverCandidates: servers,
     configured: servers.length > 0,
     envConfigured: envServers.length > 0,
     ignoredLegacyRtcServer: Boolean(rawServer) && envServers.length === 0,
@@ -842,12 +850,28 @@ router.get("/room/:roomId/zego-token", authMiddleware, async (req, res) => {
     const appIdMatchesEnv = zegoConfig.appID === Number(process.env.ZEGO_APP_ID || 0);
     const tokenExpiresAt = new Date(expiresAt * 1000).toISOString();
     const zegoWebServer = getZegoWebServerConfig(zegoConfig.appID);
+    const zegoServerCandidates = zegoWebServer.serverCandidates || normalizeZegoWebServers(zegoWebServer.server);
+    if (zegoServerCandidates.length === 0) {
+      console.error("[Zego Server Config Missing]", {
+        requestedRoomId: roomId,
+        responseRoomId: callAccess.roomId,
+        currentUserId,
+        currentUserRole,
+        appId: zegoConfig.appID,
+        reason: "no valid Zego web server candidates",
+      });
+      return res.status(500).json({ message: "Zego web server configuration is missing on the backend" });
+    }
 
     console.info("[Zego Token Issued]", {
       success: true,
       appId: zegoConfig.appID,
+      appIdEnvConfigured: zegoConfig.appIdEnvConfigured,
       appIdMatchesEnv,
+      requestedRoomId: roomId,
+      responseRoomId: callAccess.roomId,
       roomId: callAccess.roomId,
+      roomIdMatchesRequest: callAccess.roomId === roomId,
       userId: currentUserId,
       currentUserId,
       currentUserRole,
@@ -857,9 +881,13 @@ router.get("/room/:roomId/zego-token", authMiddleware, async (req, res) => {
       tokenExpiresAt,
       tokenExpiresIn: tokenLifetime,
       serverConfigured: zegoConfig.serverConfigured,
+      serverSecretConfigured: zegoConfig.serverSecretConfigured,
+      serverSecretLength: zegoConfig.serverSecretLength,
       zegoWebServerConfigured: zegoWebServer.configured,
       zegoWebServerEnvConfigured: zegoWebServer.envConfigured,
       zegoWebServerUsingFallback: zegoWebServer.isFallback,
+      zegoWebServerIgnoredLegacyRtcServer: zegoWebServer.ignoredLegacyRtcServer,
+      zegoWebServerCandidates: zegoServerCandidates,
     });
 
     res.json({
@@ -870,9 +898,13 @@ router.get("/room/:roomId/zego-token", authMiddleware, async (req, res) => {
       zegoWebServerConfigured: zegoWebServer.configured,
       zegoWebServerEnvConfigured: zegoWebServer.envConfigured,
       zegoWebServerUsingFallback: zegoWebServer.isFallback,
+      zegoWebServerIgnoredLegacyRtcServer: zegoWebServer.ignoredLegacyRtcServer,
       server: zegoWebServer.server,
+      serverCandidates: zegoServerCandidates,
       appIdMatchesEnv,
       roomId: callAccess.roomId,
+      requestedRoomId: roomId,
+      roomIdMatchesRequest: callAccess.roomId === roomId,
       userId: currentUserId,
       userID: currentUserId,
       userName: `${currentUserRole}-${currentUserId.slice(-6)}`,

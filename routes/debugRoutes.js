@@ -10,6 +10,11 @@ const ZEGO_TOKEN_EFFECTIVE_SECONDS = 60 * 60 * 2;
 const ZEGO_LOGIN_PRIVILEGE = "1";
 const ZEGO_PUBLISH_PRIVILEGE = "2";
 const ZEGO_LEGACY_RTC_SERVER = "wss://rtc-api.zego.im/ws";
+const getDefaultZegoWebServers = (appID = 0) => [
+  Number.isSafeInteger(appID) && appID > 0 ? `wss://webliveroom${appID}-api.zegocloud.com/ws` : "",
+  "wss://webliveroom-api.zegocloud.com/ws",
+  "wss://webliveroom-api.zego.im/ws",
+].filter(Boolean);
 
 const getIdString = (value) => {
   if (!value) return "";
@@ -29,15 +34,42 @@ const getZegoStreamId = (roomId, userId) => {
   return `vc_${cleanRoomId}_${cleanUserId}`.slice(0, 240);
 };
 
-const getZegoWebServerConfigured = () => {
-  const rawServer = String(process.env.ZEGO_WEB_SERVER_URL || process.env.ZEGO_SERVER || process.env.ZEGO_SERVER_URL || "").trim();
-  return rawServer
+const normalizeZegoWebServers = (server) => {
+  const normalizeOne = (value) => {
+    const text = String(value || "").trim();
+    if (!text || !/^(wss?|https?):\/\//i.test(text)) return [];
+    if (text.replace(/\/+$/, "").toLowerCase() === ZEGO_LEGACY_RTC_SERVER.replace(/\/+$/, "").toLowerCase()) {
+      return [];
+    }
+    return [text];
+  };
+
+  if (Array.isArray(server)) {
+    return server.flatMap(normalizeOne);
+  }
+
+  return String(server || "")
     .split(",")
-    .map((server) => server.trim())
-    .some((server) => (
-      /^(wss?|https?):\/\//i.test(server) &&
-      server.replace(/\/+$/, "").toLowerCase() !== ZEGO_LEGACY_RTC_SERVER.replace(/\/+$/, "").toLowerCase()
-    ));
+    .flatMap(normalizeOne);
+};
+
+const uniqueZegoWebServers = (servers = []) => servers.filter((server, index, list) => {
+  const normalized = String(server || "").replace(/\/+$/, "").toLowerCase();
+  return normalized && list.findIndex((item) => String(item || "").replace(/\/+$/, "").toLowerCase() === normalized) === index;
+});
+
+const getZegoWebServerConfig = (appID = 0) => {
+  const rawServer = String(process.env.ZEGO_WEB_SERVER_URL || process.env.ZEGO_SERVER || process.env.ZEGO_SERVER_URL || "").trim();
+  const envServers = normalizeZegoWebServers(rawServer);
+  const servers = uniqueZegoWebServers([...envServers, ...getDefaultZegoWebServers(appID)]);
+
+  return {
+    configured: servers.length > 0,
+    envConfigured: envServers.length > 0,
+    usingFallback: envServers.length === 0,
+    ignoredLegacyRtcServer: Boolean(rawServer) && envServers.length === 0,
+    serverCandidates: servers,
+  };
 };
 
 const getZegoRandomInt = () => crypto.randomInt(-2147483648, 2147483647);
@@ -101,7 +133,7 @@ router.get("/zego-token/:bookingId", authMiddleware, async (req, res) => {
   const appId = Number(process.env.ZEGO_APP_ID || 0);
   const serverSecret = String(process.env.ZEGO_SERVER_SECRET || "").trim();
   const currentUserId = getIdString(req.user?.id || req.user?._id);
-  const serverConfigured = getZegoWebServerConfigured();
+  const zegoWebServer = getZegoWebServerConfig(appId);
   const usingServerSecret = serverSecret.length === 32;
   const baseDebug = {
     appId: Number.isSafeInteger(appId) && appId > 0 ? appId : 0,
@@ -110,7 +142,11 @@ router.get("/zego-token/:bookingId", authMiddleware, async (req, res) => {
     tokenLength: 0,
     tokenPrefixFirst10: "",
     tokenExpiresAt: null,
-    serverConfigured,
+    serverConfigured: zegoWebServer.configured,
+    zegoWebServerEnvConfigured: zegoWebServer.envConfigured,
+    zegoWebServerUsingFallback: zegoWebServer.usingFallback,
+    zegoWebServerIgnoredLegacyRtcServer: zegoWebServer.ignoredLegacyRtcServer,
+    zegoWebServerCandidates: zegoWebServer.serverCandidates,
     usingServerSecret,
     tokenGenerated: false,
   };
