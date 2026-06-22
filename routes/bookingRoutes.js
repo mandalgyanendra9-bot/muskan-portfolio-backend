@@ -23,12 +23,8 @@ const CALL_JOIN_EARLY_MINUTES = 5;
 const ZEGO_TOKEN_EFFECTIVE_SECONDS = 60 * 60 * 2;
 const ZEGO_LOGIN_PRIVILEGE = "1";
 const ZEGO_PUBLISH_PRIVILEGE = "2";
-const ZEGO_LEGACY_RTC_SERVER = "wss://rtc-api.zego.im/ws";
-const getDefaultZegoWebServers = (appID = 0) => [
-  Number.isSafeInteger(appID) && appID > 0 ? `wss://webliveroom${appID}-api.zegocloud.com/ws` : "",
-  "wss://webliveroom-api.zegocloud.com/ws",
-  "wss://webliveroom-api.zego.im/ws",
-].filter(Boolean);
+const ZEGO_WEB_SERVER = "wss://webliveroom384324702-api.zegocloud.com/ws";
+const getDefaultZegoWebServers = () => [ZEGO_WEB_SERVER];
 
 const bookingPopulateFields = "name email profilePhotoUrl profileImage profilePhoto avatar photoUrl googlePhoto title rating reviewsCount role";
 
@@ -62,22 +58,25 @@ const getZegoStreamId = (roomId, userId) => {
 const getZegoAppConfig = () => {
   const appID = Number(process.env.ZEGO_APP_ID || 0);
   const serverSecret = String(process.env.ZEGO_SERVER_SECRET || "").trim();
-
-  if (!Number.isSafeInteger(appID) || appID <= 0) {
-    return { error: "Zego app ID is not configured" };
-  }
-
-  if (serverSecret.length !== 32) {
-    return { error: "Zego server secret is not configured" };
-  }
+  const serverSecretExists = serverSecret.length > 0;
+  const appIdEnvConfigured = Number.isSafeInteger(appID) && appID > 0;
+  const serverSecretConfigured = serverSecret.length === 32;
+  const error = !appIdEnvConfigured
+    ? "Zego app ID is not configured"
+    : !serverSecretConfigured
+      ? "Zego server secret is not configured"
+      : "";
 
   return {
     appID,
+    appIdType: typeof appID,
     serverSecret,
-    serverConfigured: true,
-    appIdEnvConfigured: true,
-    serverSecretConfigured: true,
+    serverConfigured: appIdEnvConfigured && serverSecretConfigured,
+    appIdEnvConfigured,
+    serverSecretExists,
+    serverSecretConfigured,
     serverSecretLength: serverSecret.length,
+    error,
   };
 };
 
@@ -85,9 +84,6 @@ const normalizeZegoWebServers = (server) => {
   const normalizeOne = (value) => {
     const text = String(value || "").trim();
     if (!text || !/^(wss?|https?):\/\//i.test(text)) return [];
-    if (text.replace(/\/+$/, "").toLowerCase() === ZEGO_LEGACY_RTC_SERVER.replace(/\/+$/, "").toLowerCase()) {
-      return [];
-    }
     return [text];
   };
 
@@ -106,17 +102,15 @@ const uniqueZegoWebServers = (servers = []) => servers.filter((server, index, li
 });
 
 const getZegoWebServerConfig = (appID = 0) => {
-  const rawServer = String(process.env.ZEGO_WEB_SERVER_URL || process.env.ZEGO_SERVER || process.env.ZEGO_SERVER_URL || "").trim();
-  const envServers = normalizeZegoWebServers(rawServer);
-  const servers = uniqueZegoWebServers([...envServers, ...getDefaultZegoWebServers(appID)]);
+  const servers = uniqueZegoWebServers(getDefaultZegoWebServers(appID));
 
   return {
     server: servers.length === 1 ? servers[0] : servers,
     serverCandidates: servers,
     configured: servers.length > 0,
-    envConfigured: envServers.length > 0,
-    ignoredLegacyRtcServer: Boolean(rawServer) && envServers.length === 0,
-    isFallback: envServers.length === 0,
+    envConfigured: false,
+    ignoredLegacyRtcServer: false,
+    isFallback: false,
   };
 };
 
@@ -866,6 +860,7 @@ router.get("/room/:roomId/zego-token", authMiddleware, async (req, res) => {
     console.info("[Zego Token Issued]", {
       success: true,
       appId: zegoConfig.appID,
+      appIdType: zegoConfig.appIdType,
       appIdEnvConfigured: zegoConfig.appIdEnvConfigured,
       appIdMatchesEnv,
       requestedRoomId: roomId,
@@ -875,6 +870,11 @@ router.get("/room/:roomId/zego-token", authMiddleware, async (req, res) => {
       userId: currentUserId,
       currentUserId,
       currentUserRole,
+      serverSecretExists: zegoConfig.serverSecretExists,
+      serverSecretLength: zegoConfig.serverSecretLength,
+      generatedRoomId: callAccess.roomId,
+      tokenPayloadRoomId: callAccess.roomId,
+      tokenPayloadUserId: currentUserId,
       streamID,
       tokenIssued: true,
       tokenLength: token.length,
@@ -894,7 +894,10 @@ router.get("/room/:roomId/zego-token", authMiddleware, async (req, res) => {
       success: true,
       appId: zegoConfig.appID,
       appID: zegoConfig.appID,
+      appIdType: zegoConfig.appIdType,
       serverConfigured: zegoConfig.serverConfigured,
+      serverSecretExists: zegoConfig.serverSecretExists,
+      serverSecretLength: zegoConfig.serverSecretLength,
       zegoWebServerConfigured: zegoWebServer.configured,
       zegoWebServerEnvConfigured: zegoWebServer.envConfigured,
       zegoWebServerUsingFallback: zegoWebServer.isFallback,
@@ -903,10 +906,13 @@ router.get("/room/:roomId/zego-token", authMiddleware, async (req, res) => {
       serverCandidates: zegoServerCandidates,
       appIdMatchesEnv,
       roomId: callAccess.roomId,
+      generatedRoomId: callAccess.roomId,
       requestedRoomId: roomId,
       roomIdMatchesRequest: callAccess.roomId === roomId,
       userId: currentUserId,
       userID: currentUserId,
+      tokenPayloadRoomId: callAccess.roomId,
+      tokenPayloadUserId: currentUserId,
       userName: `${currentUserRole}-${currentUserId.slice(-6)}`,
       currentUserRole,
       streamID,

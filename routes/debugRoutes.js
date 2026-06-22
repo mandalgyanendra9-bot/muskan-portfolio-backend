@@ -9,12 +9,8 @@ const router = express.Router();
 const ZEGO_TOKEN_EFFECTIVE_SECONDS = 60 * 60 * 2;
 const ZEGO_LOGIN_PRIVILEGE = "1";
 const ZEGO_PUBLISH_PRIVILEGE = "2";
-const ZEGO_LEGACY_RTC_SERVER = "wss://rtc-api.zego.im/ws";
-const getDefaultZegoWebServers = (appID = 0) => [
-  Number.isSafeInteger(appID) && appID > 0 ? `wss://webliveroom${appID}-api.zegocloud.com/ws` : "",
-  "wss://webliveroom-api.zegocloud.com/ws",
-  "wss://webliveroom-api.zego.im/ws",
-].filter(Boolean);
+const ZEGO_WEB_SERVER = "wss://webliveroom384324702-api.zegocloud.com/ws";
+const getDefaultZegoWebServers = () => [ZEGO_WEB_SERVER];
 
 const getIdString = (value) => {
   if (!value) return "";
@@ -34,13 +30,35 @@ const getZegoStreamId = (roomId, userId) => {
   return `vc_${cleanRoomId}_${cleanUserId}`.slice(0, 240);
 };
 
+const getZegoAppConfig = () => {
+  const appID = Number(process.env.ZEGO_APP_ID || 0);
+  const serverSecret = String(process.env.ZEGO_SERVER_SECRET || "").trim();
+  const serverSecretExists = serverSecret.length > 0;
+  const appIdEnvConfigured = Number.isSafeInteger(appID) && appID > 0;
+  const serverSecretConfigured = serverSecret.length === 32;
+  const error = !appIdEnvConfigured
+    ? "Zego app ID is not configured"
+    : !serverSecretConfigured
+      ? "Zego server secret is not configured"
+      : "";
+
+  return {
+    appID,
+    appIdType: typeof appID,
+    serverSecret,
+    serverConfigured: appIdEnvConfigured && serverSecretConfigured,
+    appIdEnvConfigured,
+    serverSecretExists,
+    serverSecretConfigured,
+    serverSecretLength: serverSecret.length,
+    error,
+  };
+};
+
 const normalizeZegoWebServers = (server) => {
   const normalizeOne = (value) => {
     const text = String(value || "").trim();
     if (!text || !/^(wss?|https?):\/\//i.test(text)) return [];
-    if (text.replace(/\/+$/, "").toLowerCase() === ZEGO_LEGACY_RTC_SERVER.replace(/\/+$/, "").toLowerCase()) {
-      return [];
-    }
     return [text];
   };
 
@@ -59,15 +77,13 @@ const uniqueZegoWebServers = (servers = []) => servers.filter((server, index, li
 });
 
 const getZegoWebServerConfig = (appID = 0) => {
-  const rawServer = String(process.env.ZEGO_WEB_SERVER_URL || process.env.ZEGO_SERVER || process.env.ZEGO_SERVER_URL || "").trim();
-  const envServers = normalizeZegoWebServers(rawServer);
-  const servers = uniqueZegoWebServers([...envServers, ...getDefaultZegoWebServers(appID)]);
+  const servers = uniqueZegoWebServers(getDefaultZegoWebServers(appID));
 
   return {
     configured: servers.length > 0,
-    envConfigured: envServers.length > 0,
-    usingFallback: envServers.length === 0,
-    ignoredLegacyRtcServer: Boolean(rawServer) && envServers.length === 0,
+    envConfigured: false,
+    usingFallback: false,
+    ignoredLegacyRtcServer: false,
     serverCandidates: servers,
   };
 };
@@ -137,17 +153,23 @@ router.get("/zego-token/:bookingId", authMiddleware, async (req, res) => {
   const usingServerSecret = serverSecret.length === 32;
   const baseDebug = {
     appId: Number.isSafeInteger(appId) && appId > 0 ? appId : 0,
+    appIdType: typeof appId,
     roomId: String(req.params.bookingId || ""),
     userId: currentUserId,
     tokenLength: 0,
     tokenPrefixFirst10: "",
     tokenExpiresAt: null,
+    generatedRoomId: String(req.params.bookingId || ""),
+    tokenPayloadRoomId: String(req.params.bookingId || ""),
+    tokenPayloadUserId: currentUserId,
     serverConfigured: zegoWebServer.configured,
     zegoWebServerEnvConfigured: zegoWebServer.envConfigured,
     zegoWebServerUsingFallback: zegoWebServer.usingFallback,
     zegoWebServerIgnoredLegacyRtcServer: zegoWebServer.ignoredLegacyRtcServer,
     zegoWebServerCandidates: zegoWebServer.serverCandidates,
     usingServerSecret,
+    serverSecretExists: serverSecret.length > 0,
+    serverSecretLength: serverSecret.length,
     tokenGenerated: false,
   };
 
@@ -186,6 +208,9 @@ router.get("/zego-token/:bookingId", authMiddleware, async (req, res) => {
       tokenLength: token.length,
       tokenPrefixFirst10: token.slice(0, 10),
       tokenExpiresAt: new Date(expiresAt * 1000).toISOString(),
+      generatedRoomId: roomId,
+      tokenPayloadRoomId: roomId,
+      tokenPayloadUserId: currentUserId,
       tokenGenerated: Boolean(token),
     });
   } catch (error) {
@@ -196,6 +221,38 @@ router.get("/zego-token/:bookingId", authMiddleware, async (req, res) => {
     });
     return res.status(500).json(baseDebug);
   }
+});
+
+router.get("/zego-public-safe", (req, res) => {
+  res.set("Cache-Control", "no-store");
+
+  const zegoConfig = getZegoAppConfig();
+  const zegoWebServer = getZegoWebServerConfig(zegoConfig.appID);
+  const generatedRoomId = String(
+    req.query.generatedRoomId ||
+    req.query.roomId ||
+    req.query.bookingId ||
+    ""
+  ).trim();
+  const tokenPayloadRoomId = String(req.query.tokenPayloadRoomId || generatedRoomId).trim();
+  const tokenPayloadUserId = String(
+    req.query.tokenPayloadUserId ||
+    req.query.userId ||
+    req.query.userID ||
+    ""
+  ).trim();
+
+  return res.json({
+    appId: Number.isSafeInteger(zegoConfig.appID) && zegoConfig.appID > 0 ? zegoConfig.appID : 0,
+    appIdType: zegoConfig.appIdType || typeof zegoConfig.appID,
+    serverSecretExists: Boolean(zegoConfig.serverSecretExists),
+    serverSecretLength: Number(zegoConfig.serverSecretLength || 0),
+    generatedRoomId,
+    tokenPayloadRoomId,
+    tokenPayloadUserId,
+    tokenExpiresAt: new Date(Date.now() + ZEGO_TOKEN_EFFECTIVE_SECONDS * 1000).toISOString(),
+    serverCandidates: zegoWebServer.serverCandidates,
+  });
 });
 
 module.exports = router;
