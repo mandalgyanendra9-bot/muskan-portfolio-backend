@@ -143,6 +143,52 @@ const generateZegoToken04 = (appID, userID, serverSecret, effectiveTimeInSeconds
   };
 };
 
+const buildZegoSmokeTokenResponse = ({ appID, serverSecret, roomId, userId }) => {
+  const safeRoomId = String(roomId || "").trim();
+  const safeUserId = String(userId || "").trim();
+  const zegoWebServer = getZegoWebServerConfig(appID);
+
+  if (!safeRoomId) {
+    throw new Error("roomId is required");
+  }
+
+  if (!safeUserId) {
+    throw new Error("userId is required");
+  }
+
+  const payload = JSON.stringify({
+    room_id: safeRoomId,
+    privilege: {
+      [ZEGO_LOGIN_PRIVILEGE]: 1,
+      [ZEGO_PUBLISH_PRIVILEGE]: 1,
+    },
+    stream_id_list: [getZegoStreamId(safeRoomId, safeUserId)],
+  });
+
+  const { token, expiresAt } = generateZegoToken04(
+    appID,
+    safeUserId,
+    serverSecret,
+    ZEGO_TOKEN_EFFECTIVE_SECONDS,
+    payload
+  );
+
+  return {
+    appId: appID,
+    appIdType: typeof appID,
+    token,
+    tokenLength: token.length,
+    tokenPrefixFirst10: token.slice(0, 10),
+    roomId: safeRoomId,
+    userId: safeUserId,
+    generatedRoomId: safeRoomId,
+    tokenPayloadRoomId: safeRoomId,
+    tokenPayloadUserId: safeUserId,
+    tokenExpiresAt: new Date(expiresAt * 1000).toISOString(),
+    serverCandidates: zegoWebServer.serverCandidates,
+  };
+};
+
 router.get("/zego-token/:bookingId", authMiddleware, async (req, res) => {
   res.set("Cache-Control", "no-store");
 
@@ -253,6 +299,62 @@ router.get("/zego-public-safe", (req, res) => {
     tokenExpiresAt: new Date(Date.now() + ZEGO_TOKEN_EFFECTIVE_SECONDS * 1000).toISOString(),
     serverCandidates: zegoWebServer.serverCandidates,
   });
+});
+
+router.get("/zego-smoke-token", (req, res) => {
+  res.set("Cache-Control", "no-store");
+
+  const zegoConfig = getZegoAppConfig();
+  const zegoWebServer = getZegoWebServerConfig(zegoConfig.appID);
+  const roomId = String(req.query.roomId || "").trim();
+  const userId = String(req.query.userId || req.query.userID || "").trim();
+
+  const baseResponse = {
+    appId: Number.isSafeInteger(zegoConfig.appID) && zegoConfig.appID > 0 ? zegoConfig.appID : 0,
+    appIdType: zegoConfig.appIdType || typeof zegoConfig.appID,
+    roomId,
+    userId,
+    generatedRoomId: roomId,
+    tokenPayloadRoomId: roomId,
+    tokenPayloadUserId: userId,
+    tokenExpiresAt: null,
+    serverCandidates: zegoWebServer.serverCandidates,
+  };
+
+  if (!roomId || !userId) {
+    return res.status(400).json({
+      ...baseResponse,
+      message: "roomId and userId are required",
+    });
+  }
+
+  if (!zegoConfig.serverConfigured) {
+    return res.status(500).json({
+      ...baseResponse,
+      message: zegoConfig.error || "Zego configuration is invalid",
+    });
+  }
+
+  try {
+    return res.json(
+      buildZegoSmokeTokenResponse({
+        appID: zegoConfig.appID,
+        serverSecret: zegoConfig.serverSecret,
+        roomId,
+        userId,
+      })
+    );
+  } catch (error) {
+    console.error("[Zego Smoke Token Error]", {
+      roomId,
+      userId,
+      message: error.message,
+    });
+    return res.status(500).json({
+      ...baseResponse,
+      message: error.message || "Unable to generate smoke token",
+    });
+  }
 });
 
 module.exports = router;
